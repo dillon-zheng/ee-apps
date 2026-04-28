@@ -131,3 +131,25 @@ class ArchiveErrorLogsSummary:
     builds_archived: int = 0
     builds_skipped: int = 0
     builds_failed: int = 0
+
+
+@dataclass(frozen=True)
+class ErrorClassification:
+    l1_category: str
+    l2_subcategory: str
+    source: str
+
+
+@dataclass
+class AnalyzeErrorsSummary:
+    builds_scanned: int = 0
+    builds_classified: int = 0
+    builds_rule_classified: int = 0
+    builds_llm_classified: int = 0
+    builds_skipped: int = 0
+    builds_failed: int = 0
+
+
+@dataclass
+class ReviewErrorSummary:
+    rows_updated: int = 0

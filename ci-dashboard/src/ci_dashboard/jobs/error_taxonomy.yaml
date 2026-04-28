@@ -1,0 +1,150 @@
+{
+  "version": 1,
+  "default_classification": {
+    "l1": "OTHERS",
+    "l2": "UNCLASSIFIED"
+  },
+  "rules": [
+    {
+      "name": "infra_jenkins_remoting",
+      "l1": "INFRA",
+      "l2": "JENKINS",
+      "text_patterns": [
+        "hudson\\.remoting",
+        "channel is already closed",
+        "agent .* went offline",
+        "cannot contact .*: java\\.io\\.IOException",
+        "closedchannelexception"
+      ]
+    },
+    {
+      "name": "infra_k8s_runtime",
+      "l1": "INFRA",
+      "l2": "K8S",
+      "text_patterns": [
+        "FailedScheduling",
+        "OOMKilled",
+        "Evicted",
+        "pod has unbound immediate PersistentVolumeClaims",
+        "node had taint"
+      ]
+    },
+    {
+      "name": "infra_network",
+      "l1": "INFRA",
+      "l2": "NETWORK",
+      "text_patterns": [
+        "i/o timeout",
+        "TLS handshake timeout",
+        "connection reset by peer",
+        "temporary failure in name resolution",
+        "no such host",
+        "context deadline exceeded"
+      ]
+    },
+    {
+      "name": "infra_storage",
+      "l1": "INFRA",
+      "l2": "STORAGE",
+      "text_patterns": [
+        "no space left on device",
+        "disk quota exceeded",
+        "read-only file system",
+        "input/output error"
+      ]
+    },
+    {
+      "name": "infra_external_dependency",
+      "l1": "INFRA",
+      "l2": "EXTERNAL_DEP",
+      "text_patterns": [
+        "rate limit exceeded",
+        "429 Too Many Requests",
+        "502 Bad Gateway",
+        "503 Service Unavailable",
+        "upstream connect error"
+      ]
+    },
+    {
+      "name": "build_compile_failure",
+      "l1": "BUILD",
+      "l2": "COMPILE",
+      "text_patterns": [
+        "compilation failed",
+        "undefined reference",
+        "syntax error",
+        "error: expected",
+        "fatal error:"
+      ]
+    },
+    {
+      "name": "build_dependency_failure",
+      "l1": "BUILD",
+      "l2": "DEPENDENCY",
+      "text_patterns": [
+        "no required module provides package",
+        "cannot find module",
+        "No matching distribution found",
+        "Could not resolve dependencies",
+        "failed to download module"
+      ]
+    },
+    {
+      "name": "build_packaging_failure",
+      "l1": "BUILD",
+      "l2": "PACKAGING",
+      "text_patterns": [
+        "failed to solve with frontend dockerfile",
+        "error building image",
+        "archive/tar",
+        "failed to push image",
+        "buildx failed"
+      ]
+    },
+    {
+      "name": "build_pipeline_config_failure",
+      "l1": "BUILD",
+      "l2": "PIPELINE_CONFIG",
+      "text_patterns": [
+        "No such DSL method",
+        "MissingPropertyException",
+        "WorkflowScript",
+        "Jenkinsfile",
+        "No such property:"
+      ]
+    },
+    {
+      "name": "unit_test_failure",
+      "l1": "UT",
+      "l2": "TEST_FAILURE",
+      "job_name_patterns": [
+        "(^|_)ghpr_unit_test($|_)",
+        "(^|_)pull_unit_test($|_)",
+        "(^|_)unit_test($|_)",
+        "ddlv1"
+      ],
+      "text_patterns": [
+        "--- FAIL:",
+        "FAIL\\s",
+        "test failed"
+      ]
+    },
+    {
+      "name": "integration_test_failure",
+      "l1": "IT",
+      "l2": "TEST_FAILURE",
+      "job_name_patterns": [
+        "integration",
+        "realcluster",
+        "lightning",
+        "mysql_test",
+        "br_"
+      ],
+      "text_patterns": [
+        "--- FAIL:",
+        "FAIL\\s",
+        "test failed"
+      ]
+    }
+  ]
+}

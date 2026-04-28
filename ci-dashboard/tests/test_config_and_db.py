@@ -29,6 +29,9 @@ def test_load_settings_supports_db_url() -> None:
             "CI_DASHBOARD_ARCHIVE_LOG_TAIL_BYTES": "65536",
             "CI_DASHBOARD_GCS_BUCKET": "ci-dashboard-prod",
             "CI_DASHBOARD_GCS_PREFIX": "ci-dashboard/custom-prefix",
+            "CI_DASHBOARD_LLM_PROVIDER": "noop",
+            "CI_DASHBOARD_LLM_MODEL": "gemini-2.5-pro",
+            "CI_DASHBOARD_LLM_API_KEY": "test-key",
             "CI_DASHBOARD_LOG_LEVEL": "debug",
         }
     )
@@ -51,6 +54,9 @@ def test_load_settings_supports_db_url() -> None:
     assert settings.archive.log_tail_bytes == 65536
     assert settings.archive.gcs_bucket == "ci-dashboard-prod"
     assert settings.archive.gcs_prefix == "ci-dashboard/custom-prefix"
+    assert settings.llm.provider == "noop"
+    assert settings.llm.model == "gemini-2.5-pro"
+    assert settings.llm.api_key == "test-key"
     assert settings.log_level == "DEBUG"
 
 

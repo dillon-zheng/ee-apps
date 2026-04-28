@@ -7,6 +7,7 @@ from datetime import date, datetime, time, timedelta
 from ci_dashboard.common.config import get_settings
 from ci_dashboard.common.db import build_engine
 from ci_dashboard.common.logging import configure_logging
+from ci_dashboard.jobs.analyze_errors import review_error_classification, run_analyze_errors
 from ci_dashboard.jobs.archive_error_logs import run_archive_error_logs
 from ci_dashboard.jobs.refresh_build_derived import (
     run_refresh_build_derived,
@@ -84,6 +85,45 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="Overwrite an existing archived log for the selected build(s)",
+    )
+    analyze_errors_parser = subparsers.add_parser(
+        "analyze-errors",
+        help="Classify archived Jenkins error logs",
+    )
+    analyze_errors_parser.add_argument(
+        "--limit",
+        type=int,
+        help="Classify at most this many candidate builds",
+    )
+    analyze_errors_parser.add_argument(
+        "--build-id",
+        type=int,
+        help="Classify a specific ci_l1_builds row id",
+    )
+    analyze_errors_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite an existing machine classification for the selected build(s)",
+    )
+    review_error_parser = subparsers.add_parser(
+        "review-error",
+        help="Apply a human review classification to a build row",
+    )
+    review_error_parser.add_argument(
+        "--build-id",
+        required=True,
+        type=int,
+        help="Target ci_l1_builds row id",
+    )
+    review_error_parser.add_argument(
+        "--l1",
+        required=True,
+        help="Human-reviewed L1 category",
+    )
+    review_error_parser.add_argument(
+        "--l2",
+        required=True,
+        help="Human-reviewed L2 subcategory",
     )
     refresh_range_parser = subparsers.add_parser(
         "refresh-build-derived-range",
@@ -226,6 +266,41 @@ def main() -> int:
         )
         logging.getLogger(__name__).info(
             "archive-error-logs finished",
+            extra={"summary": summary.__dict__},
+        )
+        return 0
+
+    if args.command == "analyze-errors":
+        if args.limit is not None and args.limit <= 0:
+            parser.error("--limit must be positive")
+        if args.build_id is not None and args.build_id <= 0:
+            parser.error("--build-id must be positive")
+        engine = build_engine(settings)
+        summary = run_analyze_errors(
+            engine,
+            settings,
+            limit=args.limit,
+            build_id=args.build_id,
+            force=args.force,
+        )
+        logging.getLogger(__name__).info(
+            "analyze-errors finished",
+            extra={"summary": summary.__dict__},
+        )
+        return 0
+
+    if args.command == "review-error":
+        if args.build_id <= 0:
+            parser.error("--build-id must be positive")
+        engine = build_engine(settings)
+        summary = review_error_classification(
+            engine,
+            build_id=args.build_id,
+            l1_category=args.l1,
+            l2_subcategory=args.l2,
+        )
+        logging.getLogger(__name__).info(
+            "review-error finished",
             extra={"summary": summary.__dict__},
         )
         return 0

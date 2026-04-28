@@ -81,6 +81,13 @@ class ArchiveSettings:
 
 
 @dataclass(frozen=True)
+class LLMSettings:
+    provider: str = "noop"
+    model: str | None = None
+    api_key: str | None = None
+
+
+@dataclass(frozen=True)
 class Settings:
     database: DatabaseSettings
     jobs: JobSettings
@@ -88,6 +95,7 @@ class Settings:
     jenkins: JenkinsSettings = JenkinsSettings()
     jenkins_ingest: JenkinsIngestSettings = JenkinsIngestSettings()
     archive: ArchiveSettings = ArchiveSettings()
+    llm: LLMSettings = LLMSettings()
     log_level: str = "INFO"
 
 
@@ -161,6 +169,11 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
             log_tail_bytes=_read_int(env, "CI_DASHBOARD_ARCHIVE_LOG_TAIL_BYTES", 262144),
             gcs_bucket=env.get("CI_DASHBOARD_GCS_BUCKET") or None,
             gcs_prefix=(env.get("CI_DASHBOARD_GCS_PREFIX") or "").strip("/"),
+        ),
+        llm=LLMSettings(
+            provider=(env.get("CI_DASHBOARD_LLM_PROVIDER") or "noop").strip() or "noop",
+            model=env.get("CI_DASHBOARD_LLM_MODEL") or None,
+            api_key=env.get("CI_DASHBOARD_LLM_API_KEY") or None,
         ),
         log_level=(env.get("CI_DASHBOARD_LOG_LEVEL") or "INFO").upper(),
     )
