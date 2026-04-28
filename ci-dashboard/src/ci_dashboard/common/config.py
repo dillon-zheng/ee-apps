@@ -85,6 +85,7 @@ class LLMSettings:
     provider: str = "noop"
     model: str | None = None
     api_key: str | None = None
+    base_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -174,6 +175,7 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
             provider=(env.get("CI_DASHBOARD_LLM_PROVIDER") or "noop").strip() or "noop",
             model=env.get("CI_DASHBOARD_LLM_MODEL") or None,
             api_key=env.get("CI_DASHBOARD_LLM_API_KEY") or None,
+            base_url=env.get("CI_DASHBOARD_LLM_BASE_URL") or None,
         ),
         log_level=(env.get("CI_DASHBOARD_LOG_LEVEL") or "INFO").upper(),
     )

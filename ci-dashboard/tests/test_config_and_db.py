@@ -32,6 +32,7 @@ def test_load_settings_supports_db_url() -> None:
             "CI_DASHBOARD_LLM_PROVIDER": "noop",
             "CI_DASHBOARD_LLM_MODEL": "gemini-2.5-pro",
             "CI_DASHBOARD_LLM_API_KEY": "test-key",
+            "CI_DASHBOARD_LLM_BASE_URL": "https://api-vip.codex-for.me/v1",
             "CI_DASHBOARD_LOG_LEVEL": "debug",
         }
     )
@@ -57,6 +58,7 @@ def test_load_settings_supports_db_url() -> None:
     assert settings.llm.provider == "noop"
     assert settings.llm.model == "gemini-2.5-pro"
     assert settings.llm.api_key == "test-key"
+    assert settings.llm.base_url == "https://api-vip.codex-for.me/v1"
     assert settings.log_level == "DEBUG"
 
 

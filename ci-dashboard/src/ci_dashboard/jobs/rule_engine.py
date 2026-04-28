@@ -51,6 +51,24 @@ class RuleEngine:
             source="default",
         )
 
+    @property
+    def allowed_classifications(self) -> tuple[tuple[str, str], ...]:
+        pairs: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for rule in self._taxonomy.rules:
+            candidate = (rule.l1_category, rule.l2_subcategory)
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            pairs.append(candidate)
+        default_candidate = (
+            self._taxonomy.default_l1_category,
+            self._taxonomy.default_l2_subcategory,
+        )
+        if default_candidate not in seen:
+            pairs.append(default_candidate)
+        return tuple(pairs)
+
     def classify(
         self,
         *,

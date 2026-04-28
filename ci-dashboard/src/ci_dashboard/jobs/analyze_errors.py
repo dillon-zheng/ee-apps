@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Mapping
 
-from sqlalchemy import bindparam, text
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from ci_dashboard.common.config import Settings
@@ -86,6 +86,7 @@ def run_analyze_errors(
         settings.llm,
         default_l1_category=resolved_rule_engine.default_classification.l1_category,
         default_l2_subcategory=resolved_rule_engine.default_classification.l2_subcategory,
+        allowed_classifications=resolved_rule_engine.allowed_classifications,
     )
     resolved_reader = reader or GCSReader()
 
