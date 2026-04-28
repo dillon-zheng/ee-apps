@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 import logging
 import re
 from typing import Any, Mapping
@@ -18,7 +19,8 @@ FAILURE_LIKE_STATES = ("failure", "error", "timeout", "timed_out", "aborted")
 
 FETCH_CANDIDATE_BUILDS = text(
     """
-    SELECT id, url, normalized_build_url, log_gcs_uri, state, build_system
+    SELECT id, url, normalized_build_url, log_gcs_uri, state, build_system,
+           start_time, completion_time
     FROM ci_l1_builds
     WHERE build_system = 'JENKINS'
       AND state IN :failure_states
@@ -136,10 +138,41 @@ def build_archive_object_ref(
     existing = parse_gcs_uri(build.get("log_gcs_uri"))
     if force and existing is not None:
         return existing.bucket, existing.object_name
+    archive_folder = resolve_archive_month_folder(build)
+    archive_file_name = f"{int(build['id'])}.log"
+    object_name = "/".join(
+        part
+        for part in (settings.archive.gcs_prefix, archive_folder, archive_file_name)
+        if part
+    )
     return (
         settings.archive.gcs_bucket or "",
-        f"{settings.archive.gcs_prefix}/build-{int(build['id'])}.log",
+        object_name,
     )
+
+
+def resolve_archive_month_folder(build: Mapping[str, Any]) -> str:
+    timestamp = parse_archive_timestamp(build.get("start_time")) or parse_archive_timestamp(
+        build.get("completion_time")
+    )
+    if timestamp is None:
+        raise ValueError(f"build {build['id']} is missing both start_time and completion_time")
+    return timestamp.strftime("%y%m")
+
+
+def parse_archive_timestamp(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    raw = str(value).strip()
+    if not raw:
+        return None
+    normalized = raw.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError(f"unsupported archive timestamp value: {value!r}") from exc
 
 
 def _archive_single_build(

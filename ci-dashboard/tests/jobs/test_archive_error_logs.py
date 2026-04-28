@@ -11,6 +11,7 @@ from ci_dashboard.common.config import (
 )
 from ci_dashboard.jobs.archive_error_logs import (
     build_archive_object_ref,
+    parse_archive_timestamp,
     redact_console_log,
     run_archive_error_logs,
 )
@@ -33,7 +34,7 @@ def _settings() -> Settings:
             build_limit=20,
             log_tail_bytes=1024,
             gcs_bucket="ci-dashboard-test",
-            gcs_prefix="ci-dashboard/v3/jenkins-logs",
+            gcs_prefix="",
         ),
         log_level="INFO",
     )
@@ -125,6 +126,13 @@ def test_redact_console_log_masks_common_secrets() -> None:
     assert "/home/[USER]/" in redacted
 
 
+def test_parse_archive_timestamp_supports_space_before_timezone_offset() -> None:
+    parsed = parse_archive_timestamp("2026-04-24 10:00:00 +00:00")
+
+    assert parsed is not None
+    assert parsed.isoformat() == "2026-04-24T10:00:00+00:00"
+
+
 def test_run_archive_error_logs_archives_failed_jenkins_build(sqlite_engine) -> None:
     _insert_build(sqlite_engine, build_id=101)
     _insert_build(sqlite_engine, build_id=102, state="success")
@@ -145,7 +153,7 @@ def test_run_archive_error_logs_archives_failed_jenkins_build(sqlite_engine) -> 
         ("https://prow.tidb.net/jenkins/job/pingcap/job/tidb/job/ghpr_unit_test/101/display/redirect", 1024)
     ]
     assert uploader.calls[0][0] == "ci-dashboard-test"
-    assert uploader.calls[0][1] == "ci-dashboard/v3/jenkins-logs/build-101.log"
+    assert uploader.calls[0][1] == "2604/101.log"
     assert "abc123" not in uploader.calls[0][2]
 
     with sqlite_engine.begin() as connection:
@@ -153,14 +161,14 @@ def test_run_archive_error_logs_archives_failed_jenkins_build(sqlite_engine) -> 
             text("SELECT log_gcs_uri FROM ci_l1_builds WHERE id = 101")
         ).mappings().one()
 
-    assert row["log_gcs_uri"] == "gcs://ci-dashboard-test/ci-dashboard/v3/jenkins-logs/build-101.log"
+    assert row["log_gcs_uri"] == "gcs://ci-dashboard-test/2604/101.log"
 
 
 def test_run_archive_error_logs_skips_existing_archive_without_force(sqlite_engine) -> None:
     _insert_build(
         sqlite_engine,
         build_id=201,
-        log_gcs_uri="gcs://ci-dashboard-test/ci-dashboard/v3/jenkins-logs/build-201.log",
+        log_gcs_uri="gcs://ci-dashboard-test/2604/201.log",
     )
     fetcher = _FakeFetcher("failure line\n")
     uploader = _FakeUploader()
@@ -216,4 +224,32 @@ def test_build_archive_object_ref_reuses_existing_uri_on_force(sqlite_engine) ->
     assert build_archive_object_ref(build, _settings(), force=True) == (
         "ci-dashboard-test",
         "custom/path/build-401.log",
+    )
+
+
+def test_build_archive_object_ref_supports_optional_prefix(sqlite_engine) -> None:
+    _insert_build(sqlite_engine, build_id=501)
+
+    with sqlite_engine.begin() as connection:
+        build = connection.execute(
+            text("SELECT id, start_time, completion_time, log_gcs_uri FROM ci_l1_builds WHERE id = 501")
+        ).mappings().one()
+
+    settings = _settings()
+    settings = Settings(
+        database=settings.database,
+        jobs=settings.jobs,
+        jenkins=settings.jenkins,
+        archive=ArchiveSettings(
+            build_limit=settings.archive.build_limit,
+            log_tail_bytes=settings.archive.log_tail_bytes,
+            gcs_bucket=settings.archive.gcs_bucket,
+            gcs_prefix="ci-dashboard/jenkins",
+        ),
+        log_level=settings.log_level,
+    )
+
+    assert build_archive_object_ref(build, settings, force=False) == (
+        "ci-dashboard-test",
+        "ci-dashboard/jenkins/2604/501.log",
     )
