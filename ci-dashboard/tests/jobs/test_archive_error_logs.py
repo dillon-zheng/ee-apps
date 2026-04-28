@@ -11,6 +11,7 @@ from ci_dashboard.common.config import (
 )
 from ci_dashboard.jobs.archive_error_logs import (
     build_archive_object_ref,
+    parse_archive_timestamp,
     redact_console_log,
     run_archive_error_logs,
 )
@@ -123,6 +124,13 @@ def test_redact_console_log_masks_common_secrets() -> None:
     assert "[EMAIL]" in redacted
     assert "[INTERNAL_IP]" in redacted
     assert "/home/[USER]/" in redacted
+
+
+def test_parse_archive_timestamp_supports_space_before_timezone_offset() -> None:
+    parsed = parse_archive_timestamp("2026-04-24 10:00:00 +00:00")
+
+    assert parsed is not None
+    assert parsed.isoformat() == "2026-04-24T10:00:00+00:00"
 
 
 def test_run_archive_error_logs_archives_failed_jenkins_build(sqlite_engine) -> None:

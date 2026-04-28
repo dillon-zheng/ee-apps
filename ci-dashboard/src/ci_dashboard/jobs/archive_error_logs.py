@@ -168,7 +168,7 @@ def parse_archive_timestamp(value: Any) -> datetime | None:
     raw = str(value).strip()
     if not raw:
         return None
-    normalized = raw.replace("Z", "+00:00").replace(" ", "T")
+    normalized = raw.replace("Z", "+00:00")
     try:
         return datetime.fromisoformat(normalized)
     except ValueError as exc:
