@@ -1283,6 +1283,16 @@ def _sqlite_normalized_build_url_sql(column_name: str) -> str:
 def _mysql_normalized_build_url_sql(column_name: str) -> str:
     trimmed = f"TRIM(COALESCE({column_name}, ''))"
     without_redirect = f"REPLACE({trimmed}, '/display/redirect', '')"
+    canonical_host = (
+        "CASE "
+        f"WHEN {without_redirect} = '' THEN NULL "
+        f"WHEN {without_redirect} REGEXP '^https?://prow\\\\.tidb\\\\.net/' THEN 'https://prow.tidb.net' "
+        f"WHEN {without_redirect} REGEXP '^https?://do\\\\.pingcap\\\\.net/' THEN 'https://do.pingcap.net' "
+        f"WHEN {without_redirect} REGEXP '^https?://jenkins\\\\.jenkins\\\\.svc\\\\.cluster\\\\.local(:[0-9]+)?/' THEN 'https://prow.tidb.net' "
+        f"WHEN {without_redirect} NOT REGEXP '^https?://' THEN 'https://prow.tidb.net' "
+        "ELSE NULL "
+        "END"
+    )
     stripped_known_host = (
         "CASE "
         f"WHEN {without_redirect} = '' THEN NULL "
@@ -1311,9 +1321,9 @@ def _mysql_normalized_build_url_sql(column_name: str) -> str:
     )
     return (
         "CASE "
-        f"WHEN {canonical_path} IS NULL OR {canonical_path} = '' THEN NULL "
+        f"WHEN {canonical_path} IS NULL OR {canonical_path} = '' OR {canonical_host} IS NULL THEN NULL "
         f"WHEN {canonical_path} LIKE '/jenkins/job/%' OR {canonical_path} LIKE '/view/gs/%' "
-        f"THEN CONCAT('https://prow.tidb.net', REGEXP_REPLACE({canonical_path}, '/+$', ''), '/') "
+        f"THEN CONCAT({canonical_host}, REGEXP_REPLACE({canonical_path}, '/+$', ''), '/') "
         "ELSE NULL "
         "END"
     )

@@ -12,6 +12,11 @@ def test_normalize_build_url_strips_known_prefix_and_redirect() -> None:
     assert normalize_build_url(raw) == "https://prow.tidb.net/jenkins/job/pingcap/job/tidb/job/ghpr_unit_test/299/"
 
 
+def test_normalize_build_url_preserves_public_host() -> None:
+    raw = "https://do.pingcap.net/jenkins/job/pingcap/job/tidb/job/ghpr_unit_test/299/display/redirect"
+    assert normalize_build_url(raw) == "https://do.pingcap.net/jenkins/job/pingcap/job/tidb/job/ghpr_unit_test/299/"
+
+
 def test_normalize_build_url_handles_none_and_blank() -> None:
     assert normalize_build_url(None) is None
     assert normalize_build_url("   ") is None
