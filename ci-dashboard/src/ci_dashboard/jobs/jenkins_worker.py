@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 from urllib.parse import urlsplit
 
@@ -171,7 +171,8 @@ INSERT_BUILD_FROM_JENKINS = text(
 UPDATE_BUILD_FROM_JENKINS = text(
     """
     UPDATE ci_l1_builds
-    SET state = :state,
+    SET source_prow_job_id = COALESCE(source_prow_job_id, :source_prow_job_id),
+        state = :state,
         url = COALESCE(url, :url),
         normalized_build_url = COALESCE(normalized_build_url, :normalized_build_url),
         job_name = COALESCE(job_name, :job_name),
@@ -222,6 +223,7 @@ class ParsedJenkinsFinishedEvent:
     event_time: datetime | None
     build_url: str
     normalized_build_url: str
+    source_prow_job_id: str | None
     jenkins_result: str | None
     state: str
     job_name: str | None
@@ -248,7 +250,7 @@ class ParsedJenkinsFinishedEvent:
         return {
             "id": None,
             "source_prow_row_id": None,
-            "source_prow_job_id": None,
+            "source_prow_job_id": self.source_prow_job_id,
             "namespace": None,
             "job_name": self.job_name,
             "job_type": self.job_type,
@@ -430,12 +432,22 @@ def parse_jenkins_finished_event(
     normalized_build_url = normalize_build_url(build_url)
     if normalized_build_url is None:
         raise ValueError(f"failed to normalize Jenkins build URL: {build_url!r}")
+    if not build_url.startswith(("http://", "https://")):
+        build_url = normalized_build_url
 
     build_url_org, build_url_repo = _extract_repo_from_build_url(normalized_build_url)
+    job_spec = _extract_job_spec(custom_data)
+    job_spec_refs = _as_mapping(job_spec.get("refs")) if job_spec else {}
+    job_spec_first_pull = _first_mapping(job_spec_refs.get("pulls"))
+    job_spec_org = _first_non_empty_str(job_spec_refs.get("org"), build_url_org)
+    job_spec_repo = _first_non_empty_str(job_spec_refs.get("repo"), build_url_repo)
     job_name = _first_non_empty_str(
         custom_data.get("job_name"),
         custom_data.get("jobName"),
+        custom_data.get("name"),
+        custom_data.get("displayName"),
         custom_data.get("pipelineName"),
+        _nested_get(data, "subject", "content", "pipelineName"),
         _extract_job_name_from_build_url(normalized_build_url),
     )
 
@@ -446,6 +458,7 @@ def parse_jenkins_finished_event(
         custom_data.get("org"),
         custom_data.get("github_org"),
         custom_data.get("ghprbGhRepositoryOwner"),
+        job_spec_org,
         build_url_org,
     )
     repo_candidate = _first_non_empty_str(
@@ -453,12 +466,14 @@ def parse_jenkins_finished_event(
         custom_data.get("github_repo"),
         custom_data.get("ghprbGhRepositoryName"),
         custom_data.get("repository"),
+        job_spec_repo,
         build_url_repo,
     )
     repo_full_name = _first_non_empty_str(
         custom_data.get("repo_full_name"),
         custom_data.get("github_repo_full_name"),
         custom_data.get("ghprbGhRepository"),
+        f"{job_spec_org}/{job_spec_repo}" if job_spec_org and job_spec_repo else None,
     )
     org, repo, repo_full_name = _normalize_repo_fields(org, repo_candidate, repo_full_name)
     if repo_full_name is None and org and repo:
@@ -468,12 +483,14 @@ def parse_jenkins_finished_event(
         custom_data.get("target_branch"),
         custom_data.get("branch"),
         custom_data.get("ghprbTargetBranch"),
+        job_spec_refs.get("base_ref"),
     )
     pr_number = _first_non_empty_int(
         custom_data.get("pr_number"),
         custom_data.get("pr"),
         custom_data.get("pull"),
         custom_data.get("ghprbPullId"),
+        _nested_get(job_spec_first_pull, "number"),
     )
     start_time = _parse_datetime(
         _first_non_none(
@@ -498,10 +515,16 @@ def parse_jenkins_finished_event(
             envelope.event_time,
         )
     )
-    total_seconds = _duration_seconds(start_time, completion_time)
+    duration_seconds = _extract_duration_seconds(data, custom_data)
+    if start_time is None and completion_time is not None and duration_seconds is not None:
+        start_time = completion_time - timedelta(seconds=duration_seconds)
+    total_seconds = _duration_seconds(start_time, completion_time) or duration_seconds
+    source_prow_job_id = _extract_source_prow_job_id(custom_data, job_spec)
     build_id = _first_non_empty_str(
         custom_data.get("build_id"),
         custom_data.get("buildId"),
+        _nested_get(custom_data, "build", "parameters", "BUILD_ID"),
+        job_spec.get("buildid") if job_spec else None,
         _extract_build_number_from_url(normalized_build_url),
     )
     return ParsedJenkinsFinishedEvent(
@@ -510,18 +533,23 @@ def parse_jenkins_finished_event(
         event_time=envelope.event_time,
         build_url=build_url,
         normalized_build_url=normalized_build_url,
+        source_prow_job_id=source_prow_job_id,
         jenkins_result=jenkins_result,
         state=state,
         job_name=job_name,
-        job_type=None,
+        job_type=_first_non_empty_str(custom_data.get("job_type"), custom_data.get("jobType"), job_spec.get("type") if job_spec else None),
         org=org,
         repo=repo,
         repo_full_name=repo_full_name,
         base_ref=target_branch,
         pr_number=pr_number,
         is_pr_build=pr_number is not None,
-        context=_first_non_empty_str(custom_data.get("context")),
-        author=_first_non_empty_str(custom_data.get("author"), custom_data.get("triggered_by")),
+        context=_first_non_empty_str(custom_data.get("context"), job_spec.get("job") if job_spec else None),
+        author=_first_non_empty_str(
+            custom_data.get("author"),
+            custom_data.get("triggered_by"),
+            _nested_get(job_spec_first_pull, "author"),
+        ),
         build_id=build_id,
         start_time=start_time,
         completion_time=completion_time,
@@ -533,10 +561,11 @@ def parse_jenkins_finished_event(
             custom_data.get("commit"),
             custom_data.get("ghprbActualCommit"),
             custom_data.get("ghprbPullActualCommit"),
+            _nested_get(job_spec_first_pull, "sha"),
         ),
         target_branch=target_branch,
-        cloud_phase=classify_cloud_phase(build_url),
-        build_system=classify_build_system(build_url),
+        cloud_phase=classify_cloud_phase(normalized_build_url),
+        build_system=classify_build_system(normalized_build_url),
     )
 
 
@@ -558,11 +587,11 @@ def _upsert_build_from_jenkins_event(connection: Connection, parsed: ParsedJenki
     existing_by_prow_job_id, existing_by_build_url = fetch_existing_build_targets(
         connection,
         normalized_build_urls=[parsed.normalized_build_url],
-        source_prow_job_ids=[],
+        source_prow_job_ids=[parsed.source_prow_job_id] if parsed.source_prow_job_id else [],
     )
     target_id = resolve_merge_target_id(
         normalized_build_url=parsed.normalized_build_url,
-        source_prow_job_id=None,
+        source_prow_job_id=parsed.source_prow_job_id,
         existing_by_prow_job_id=existing_by_prow_job_id,
         existing_by_build_url=existing_by_build_url,
         log_context={"job_name": JOB_NAME},
@@ -652,11 +681,16 @@ def _extract_build_url(
 ) -> str | None:
     for candidate in (
         payload.get("subject"),
+        payload.get("source"),
         data.get("url"),
         data.get("buildUrl"),
         data.get("buildURL"),
         data.get("runURL"),
         data.get("runUrl"),
+        _nested_get(data, "context", "source"),
+        _nested_get(custom_data, "build", "url"),
+        _nested_get(custom_data, "build", "buildUrl"),
+        _nested_get(custom_data, "build", "buildURL"),
         custom_data.get("url"),
         custom_data.get("buildUrl"),
         custom_data.get("buildURL"),
@@ -682,7 +716,64 @@ def _extract_result(data: Mapping[str, Any], custom_data: Mapping[str, Any]) -> 
         custom_data.get("outcome"),
         custom_data.get("status"),
         _nested_get(data, "pipelineRun", "result"),
+        _nested_get(data, "subject", "content", "outcome"),
+        _nested_get(data, "subject", "content", "result"),
     )
+
+
+def _extract_duration_seconds(data: Mapping[str, Any], custom_data: Mapping[str, Any]) -> int | None:
+    duration_millis = _first_non_empty_int(
+        data.get("durationMillis"),
+        data.get("duration_ms"),
+        data.get("duration"),
+        _nested_get(custom_data, "build", "durationMillis"),
+        _nested_get(custom_data, "build", "duration_ms"),
+        _nested_get(custom_data, "build", "duration"),
+    )
+    if duration_millis is None:
+        return None
+    if duration_millis < 0:
+        return None
+    return duration_millis // 1000
+
+
+def _extract_job_spec(custom_data: Mapping[str, Any]) -> dict[str, Any] | None:
+    raw_job_spec = _first_non_empty_str(
+        custom_data.get("JOB_SPEC"),
+        custom_data.get("job_spec"),
+        _nested_get(custom_data, "build", "parameters", "JOB_SPEC"),
+    )
+    if raw_job_spec is None:
+        return None
+    try:
+        parsed = json.loads(raw_job_spec)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, Mapping):
+        return None
+    return dict(parsed)
+
+
+def _extract_source_prow_job_id(
+    custom_data: Mapping[str, Any],
+    job_spec: Mapping[str, Any] | None,
+) -> str | None:
+    return _first_non_empty_str(
+        custom_data.get("PROW_JOB_ID"),
+        custom_data.get("prow_job_id"),
+        _nested_get(custom_data, "build", "parameters", "PROW_JOB_ID"),
+        job_spec.get("prowjobid") if job_spec else None,
+    )
+
+
+def _first_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, Mapping):
+                return dict(item)
+    if isinstance(value, Mapping):
+        return dict(value)
+    return {}
 
 
 def _extract_repo_from_build_url(normalized_build_url: str) -> tuple[str | None, str | None]:

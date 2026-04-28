@@ -63,11 +63,12 @@ def resolve_merge_target_id(
     if not candidates:
         return None
 
+    unresolved_candidates = [candidate for candidate in candidates if not candidate.get("source_prow_job_id")]
+
     if source_prow_job_id is None:
         if len(candidates) == 1:
             return int(candidates[0]["id"])
 
-        unresolved_candidates = [candidate for candidate in candidates if not candidate.get("source_prow_job_id")]
         if len(unresolved_candidates) == 1:
             return int(unresolved_candidates[0]["id"])
 
@@ -80,13 +81,6 @@ def resolve_merge_target_id(
         for candidate in candidates
         if candidate.get("source_prow_job_id") not in {None, source_prow_job_id}
     )
-    if conflicting_source_ids:
-        raise ValueError(
-            "normalized_build_url already belongs to a different source_prow_job_id: "
-            f"{normalized_build_url} -> {conflicting_source_ids}"
-        )
-
-    unresolved_candidates = [candidate for candidate in candidates if not candidate.get("source_prow_job_id")]
     if len(unresolved_candidates) == 1:
         return int(unresolved_candidates[0]["id"])
     if len(unresolved_candidates) > 1:
@@ -104,6 +98,25 @@ def resolve_merge_target_id(
             extra=extra,
         )
         return int(chosen["id"])
+
+    if conflicting_source_ids:
+        if source_prow_job_id is not None:
+            extra = {
+                "normalized_build_url": normalized_build_url,
+                "existing_source_prow_job_ids": conflicting_source_ids,
+                "incoming_source_prow_job_id": source_prow_job_id,
+            }
+            if log_context:
+                extra.update(log_context)
+            LOG.warning(
+                "normalized_build_url is reused by multiple source_prow_job_id values; inserting a new canonical row",
+                extra=extra,
+            )
+            return None
+        raise ValueError(
+            "normalized_build_url already belongs to a different source_prow_job_id: "
+            f"{normalized_build_url} -> {conflicting_source_ids}"
+        )
 
     return None
 

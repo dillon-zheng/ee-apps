@@ -1047,7 +1047,7 @@ def test_case_tables_exclude_cross_cloud_and_stale_build_key_collisions(sqlite_e
         failure_category=None,
         start_time="2026-04-10 14:00:00",
         pr_number=902,
-        normalized_build_url="https://prow.tidb.net/jenkins/job/pingcap/job/tidb/job/pull_unit_test_next_gen/945/",
+        normalized_build_url="https://do.pingcap.net/jenkins/job/pingcap/job/tidb/job/pull_unit_test_next_gen/945/",
         build_id="prow-ghost-time",
     )
     _insert_pr_event(

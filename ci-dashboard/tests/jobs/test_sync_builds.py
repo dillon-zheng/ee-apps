@@ -126,6 +126,7 @@ def test_map_build_row_allows_missing_optional_status_fields() -> None:
 
     build = map_build_row(row)
 
+    assert build.normalized_build_url == "https://do.pingcap.net/jenkins/job/abc/"
     assert build.build_id is None
     assert build.pod_name is None
     assert build.cloud_phase == "IDC"
@@ -306,7 +307,7 @@ def test_sync_builds_end_to_end_with_sqlite(sqlite_engine) -> None:
     assert rows[0]["build_system"] == "JENKINS"
     assert rows[1]["cloud_phase"] == "IDC"
     assert rows[1]["build_system"] == "JENKINS"
-    assert rows[1]["normalized_build_url"] == "https://prow.tidb.net/jenkins/job/pingcap/job/tidb/job/nightly/2/"
+    assert rows[1]["normalized_build_url"] == "https://do.pingcap.net/jenkins/job/pingcap/job/tidb/job/nightly/2/"
     assert state is not None
     assert state.last_status == "succeeded"
     assert state.watermark == {"last_source_prow_row_id": 2}

@@ -1347,20 +1347,47 @@ def _normalize_case_build_key_expr(connection: Connection, column_name: str) -> 
 
     trimmed = f"TRIM(COALESCE({column_name}, ''))"
     without_redirect = f"REPLACE({trimmed}, '/display/redirect', '')"
-    canonical = (
+    canonical_host = (
         "CASE "
         f"WHEN {without_redirect} = '' THEN NULL "
-        f"WHEN {without_redirect} LIKE 'https://do.pingcap.net/%' "
-        f"THEN CONCAT('https://prow.tidb.net', SUBSTRING({without_redirect}, CHAR_LENGTH('https://do.pingcap.net') + 1)) "
-        f"WHEN {without_redirect} LIKE 'https://prow.tidb.net/%' THEN {without_redirect} "
+        f"WHEN {without_redirect} LIKE 'https://prow.tidb.net/%' THEN 'https://prow.tidb.net' "
+        f"WHEN {without_redirect} LIKE 'https://do.pingcap.net/%' THEN 'https://do.pingcap.net' "
+        f"WHEN {without_redirect} REGEXP '^https?://jenkins\\\\.jenkins\\\\.svc\\\\.cluster\\\\.local(:[0-9]+)?/' THEN 'https://prow.tidb.net' "
+        f"WHEN {without_redirect} NOT REGEXP '^https?://' THEN 'https://prow.tidb.net' "
+        "ELSE NULL "
+        "END"
+    )
+    stripped_known_host = (
+        "CASE "
+        f"WHEN {without_redirect} = '' THEN NULL "
+        f"WHEN {without_redirect} REGEXP '^https?://prow\\\\.tidb\\\\.net/' "
+        f"THEN REGEXP_REPLACE({without_redirect}, '^https?://prow\\\\.tidb\\\\.net', '') "
+        f"WHEN {without_redirect} REGEXP '^https?://do\\\\.pingcap\\\\.net/' "
+        f"THEN REGEXP_REPLACE({without_redirect}, '^https?://do\\\\.pingcap\\\\.net', '') "
+        f"WHEN {without_redirect} REGEXP '^https?://jenkins\\\\.jenkins\\\\.svc\\\\.cluster\\\\.local(:[0-9]+)?/' "
+        f"THEN REGEXP_REPLACE({without_redirect}, '^https?://jenkins\\\\.jenkins\\\\.svc\\\\.cluster\\\\.local(:[0-9]+)?', '') "
         f"ELSE {without_redirect} "
+        "END"
+    )
+    normalized_path = (
+        "CASE "
+        f"WHEN {stripped_known_host} IS NULL OR {stripped_known_host} = '' THEN NULL "
+        f"WHEN LEFT({stripped_known_host}, 1) = '/' THEN {stripped_known_host} "
+        f"ELSE CONCAT('/', TRIM(LEADING '/' FROM {stripped_known_host})) "
+        "END"
+    )
+    canonical_path = (
+        "CASE "
+        f"WHEN {normalized_path} IS NULL THEN NULL "
+        f"WHEN {normalized_path} LIKE '/job/%' THEN CONCAT('/jenkins', {normalized_path}) "
+        f"ELSE {normalized_path} "
         "END"
     )
     return (
         "CASE "
-        f"WHEN {canonical} IS NULL OR {canonical} = '' THEN NULL "
-        f"WHEN RIGHT({canonical}, 1) = '/' THEN {canonical} "
-        f"ELSE CONCAT({canonical}, '/') "
+        f"WHEN {canonical_path} IS NULL OR {canonical_path} = '' OR {canonical_host} IS NULL THEN NULL "
+        f"WHEN RIGHT({canonical_path}, 1) = '/' THEN CONCAT({canonical_host}, {canonical_path}) "
+        f"ELSE CONCAT({canonical_host}, {canonical_path}, '/') "
         "END"
     )
 

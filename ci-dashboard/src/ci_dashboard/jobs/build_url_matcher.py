@@ -4,6 +4,7 @@ import re
 from urllib import parse as urllib_parse
 
 GCP_HOST = "https://prow.tidb.net"
+IDC_HOST = "https://do.pingcap.net"
 PROW_NATIVE_PREFIX = "https://prow.tidb.net/view/gs/"
 JENKINS_PREFIXES = (
     "https://prow.tidb.net/jenkins/",
@@ -24,9 +25,17 @@ def normalize_build_url(url: str | None) -> str | None:
     normalized = url.strip()
     if normalized == "":
         return None
+    canonical_host: str | None = None
     if normalized.startswith(("http://", "https://")):
         parsed = urllib_parse.urlparse(normalized)
+        host = (parsed.hostname or "").lower()
         path = parsed.path or ""
+        if host == "prow.tidb.net":
+            canonical_host = GCP_HOST
+        elif host == "do.pingcap.net":
+            canonical_host = IDC_HOST
+        elif host == "jenkins.jenkins.svc.cluster.local":
+            canonical_host = GCP_HOST
     else:
         path = normalized
 
@@ -40,12 +49,10 @@ def normalize_build_url(url: str | None) -> str | None:
     if path.startswith("/job/"):
         path = f"/jenkins{path}"
     if path.startswith(CANONICAL_JENKINS_PATH_PREFIX) or path.startswith(CANONICAL_PROW_PATH_PREFIX):
-        return _canonical_full_url(path)
+        return _canonical_full_url(path, canonical_host=canonical_host or GCP_HOST)
 
-    if any(normalized.startswith(prefix) for prefix in INTERNAL_JENKINS_HOST_PREFIXES) and path.startswith(
-        CANONICAL_JENKINS_PATH_PREFIX
-    ):
-        return _canonical_full_url(path)
+    if any(normalized.startswith(prefix) for prefix in INTERNAL_JENKINS_HOST_PREFIXES) and path.startswith(CANONICAL_JENKINS_PATH_PREFIX):
+        return _canonical_full_url(path, canonical_host=GCP_HOST)
     return None
 
 
@@ -88,12 +95,12 @@ def build_job_url(normalized_job_path: str | None, cloud_phase: str | None) -> s
         return path if path.endswith("/") else f"{path}/"
     if not path.startswith("/"):
         path = f"/{path}"
-    host = GCP_HOST if str(cloud_phase or "").upper() == "GCP" else "https://do.pingcap.net"
+    host = GCP_HOST if str(cloud_phase or "").upper() == "GCP" else IDC_HOST
     return f"{host}{path}"
 
 
-def _canonical_full_url(path: str) -> str:
+def _canonical_full_url(path: str, *, canonical_host: str) -> str:
     normalized_path = path.rstrip("/")
     if normalized_path == "":
-        return f"{GCP_HOST}/"
-    return f"{GCP_HOST}{normalized_path}/"
+        return f"{canonical_host}/"
+    return f"{canonical_host}{normalized_path}/"
