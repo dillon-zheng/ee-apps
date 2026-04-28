@@ -56,6 +56,71 @@ def _finished_event_payload(*, event_id: str = "evt-1") -> dict[str, object]:
     }
 
 
+def _real_jenkins_plugin_finished_event_payload(*, event_id: str = "evt-real-1") -> dict[str, object]:
+    return {
+        "specversion": "0.3",
+        "id": event_id,
+        "source": "job/pingcap/job/tidb/job/pull_mysql_client_test/1816/",
+        "type": "dev.cdevents.pipelinerun.finished.0.1.0",
+        "datacontenttype": "application/json",
+        "time": "2026-04-27T13:09:00.499612608Z",
+        "data": {
+            "context": {
+                "id": "ff67a5de-f3b1-403e-9c0a-d41b2103a108",
+                "type": "dev.cdevents.pipelinerun.finished.0.1.0",
+                "source": "job/pingcap/job/tidb/job/pull_mysql_client_test/1816/",
+                "version": "0.1.2",
+                "timestamp": "2026-04-27T13:09:00Z",
+            },
+            "customData": {
+                "name": "pull_mysql_client_test",
+                "displayName": "pull_mysql_client_test",
+                "url": "job/pingcap/job/tidb/job/pull_mysql_client_test/",
+                "build": {
+                    "number": 1816,
+                    "queueId": 202018,
+                    "duration": 566556,
+                    "url": "job/pingcap/job/tidb/job/pull_mysql_client_test/1816/",
+                    "parameters": {
+                        "BUILD_ID": "2048748867029045251",
+                        "JOB_SPEC": json.dumps(
+                            {
+                                "type": "presubmit",
+                                "job": "pingcap/tidb/pull_mysql_client_test",
+                                "buildid": "2048748867029045251",
+                                "prowjobid": "3bfe389c-e361-4a6d-a1d6-679fb87b0e13",
+                                "refs": {
+                                    "org": "pingcap",
+                                    "repo": "tidb",
+                                    "base_ref": "master",
+                                    "pulls": [
+                                        {
+                                            "number": 65626,
+                                            "author": "terry1purcell",
+                                            "sha": "e6030436c2093b30da167ca295887b8df8eaeb07",
+                                        }
+                                    ],
+                                },
+                            }
+                        ),
+                        "PROW_JOB_ID": "3bfe389c-e361-4a6d-a1d6-679fb87b0e13",
+                    },
+                },
+            },
+            "customDataContentType": "application/json",
+            "subject": {
+                "id": "1816",
+                "type": "PIPELINERUN",
+                "content": {
+                    "pipelineName": "pingcap » tidb » pull_mysql_client_test",
+                    "outcome": "SUCCESS",
+                    "errors": "",
+                },
+            },
+        },
+    }
+
+
 def test_parse_jenkins_finished_event_extracts_canonical_fields() -> None:
     parsed = parse_jenkins_finished_event(_finished_event_payload(), _settings())
 
@@ -72,6 +137,32 @@ def test_parse_jenkins_finished_event_extracts_canonical_fields() -> None:
     assert parsed.total_seconds == 1200
     assert parsed.start_time == datetime(2026, 4, 24, 10, 0, 0)
     assert parsed.completion_time == datetime(2026, 4, 24, 10, 20, 0)
+
+
+def test_parse_jenkins_finished_event_supports_real_plugin_payload() -> None:
+    parsed = parse_jenkins_finished_event(_real_jenkins_plugin_finished_event_payload(), _settings())
+
+    assert parsed.build_url == "https://prow.tidb.net/jenkins/job/pingcap/job/tidb/job/pull_mysql_client_test/1816/"
+    assert parsed.normalized_build_url == "https://prow.tidb.net/jenkins/job/pingcap/job/tidb/job/pull_mysql_client_test/1816/"
+    assert parsed.jenkins_result == "SUCCESS"
+    assert parsed.state == "success"
+    assert parsed.job_name == "pull_mysql_client_test"
+    assert parsed.job_type == "presubmit"
+    assert parsed.org == "pingcap"
+    assert parsed.repo == "tidb"
+    assert parsed.repo_full_name == "pingcap/tidb"
+    assert parsed.base_ref == "master"
+    assert parsed.pr_number == 65626
+    assert parsed.is_pr_build is True
+    assert parsed.author == "terry1purcell"
+    assert parsed.head_sha == "e6030436c2093b30da167ca295887b8df8eaeb07"
+    assert parsed.build_id == "2048748867029045251"
+    assert parsed.build_system == "JENKINS"
+    assert parsed.cloud_phase == "GCP"
+    assert parsed.run_seconds == 566
+    assert parsed.total_seconds == 566
+    assert parsed.start_time is not None
+    assert parsed.completion_time is not None
 
 
 def test_process_jenkins_event_message_inserts_build_and_audit(sqlite_engine) -> None:
@@ -108,6 +199,45 @@ def test_process_jenkins_event_message_inserts_build_and_audit(sqlite_engine) ->
     assert audit["processing_status"] == "PROCESSED"
     assert audit["normalized_build_url"] == "https://prow.tidb.net/jenkins/job/pingcap/job/tidb/job/ghpr_unit_test/301/"
     assert audit["result"] == "FAILURE"
+
+
+def test_process_jenkins_event_message_inserts_real_plugin_payload(sqlite_engine) -> None:
+    result = process_jenkins_event_message(sqlite_engine, _settings(), _real_jenkins_plugin_finished_event_payload())
+
+    assert result == "processed"
+
+    with sqlite_engine.begin() as connection:
+        build = connection.execute(
+            text(
+                """
+                SELECT state, url, normalized_build_url, job_type, repo_full_name, pr_number, author, head_sha, build_system, cloud_phase
+                FROM ci_l1_builds
+                """
+            )
+        ).mappings().one()
+        audit = connection.execute(
+            text(
+                """
+                SELECT event_id, processing_status, normalized_build_url, result
+                FROM ci_l1_jenkins_build_events
+                """
+            )
+        ).mappings().one()
+
+    assert build["state"] == "success"
+    assert build["url"] == "https://prow.tidb.net/jenkins/job/pingcap/job/tidb/job/pull_mysql_client_test/1816/"
+    assert build["normalized_build_url"] == "https://prow.tidb.net/jenkins/job/pingcap/job/tidb/job/pull_mysql_client_test/1816/"
+    assert build["job_type"] == "presubmit"
+    assert build["repo_full_name"] == "pingcap/tidb"
+    assert build["pr_number"] == 65626
+    assert build["author"] == "terry1purcell"
+    assert build["head_sha"] == "e6030436c2093b30da167ca295887b8df8eaeb07"
+    assert build["build_system"] == "JENKINS"
+    assert build["cloud_phase"] == "GCP"
+    assert audit["event_id"] == "evt-real-1"
+    assert audit["processing_status"] == "PROCESSED"
+    assert audit["normalized_build_url"] == "https://prow.tidb.net/jenkins/job/pingcap/job/tidb/job/pull_mysql_client_test/1816/"
+    assert audit["result"] == "SUCCESS"
 
 
 def test_process_jenkins_event_message_enriches_existing_prow_row_without_clearing_it(sqlite_engine) -> None:
