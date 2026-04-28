@@ -32,6 +32,22 @@ class GCSUploader:
         return GCSObjectRef(bucket=bucket, object_name=object_name).uri
 
 
+class GCSReader:
+    def __init__(self, client: Any | None = None) -> None:
+        self._client = client or _build_storage_client()
+
+    def download_text(
+        self,
+        *,
+        bucket: str,
+        object_name: str,
+        encoding: str = "utf-8",
+    ) -> str:
+        bucket_obj = self._client.bucket(bucket)
+        blob = bucket_obj.blob(object_name)
+        return blob.download_as_text(encoding=encoding)
+
+
 def parse_gcs_uri(uri: str | None) -> GCSObjectRef | None:
     if not uri or not uri.startswith("gcs://"):
         return None
@@ -49,6 +65,6 @@ def _build_storage_client() -> Any:
         from google.cloud import storage
     except ImportError as exc:
         raise RuntimeError(
-            "google-cloud-storage is required for archive-error-logs; reinstall ci-dashboard dependencies"
+            "google-cloud-storage is required for ci-dashboard GCS log operations; reinstall ci-dashboard dependencies"
         ) from exc
     return storage.Client()

@@ -1046,7 +1046,7 @@ ci-dashboard/
 │   │   └── cli.py
 │   └── common/
 │       └── config.py
-├── error_taxonomy.yaml
+├── error_taxonomy.json
 └── docs/
     └── ci-dashboard-v3-jenkins-design.md
 ```

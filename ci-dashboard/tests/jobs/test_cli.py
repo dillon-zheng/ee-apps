@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
+import pytest
+
 from ci_dashboard.common.config import DatabaseSettings, JobSettings, Settings
 from ci_dashboard.common.models import (
+    AnalyzeErrorsSummary,
     ArchiveErrorLogsSummary,
     ConsumeJenkinsEventsSummary,
     RefreshBuildDerivedSummary,
+    ReviewErrorSummary,
     SyncBuildsSummary,
     SyncFlakyIssuesSummary,
     SyncPodsSummary,
@@ -229,6 +233,74 @@ def test_cli_archive_error_logs_dispatch(monkeypatch) -> None:
     assert cli.main() == 0
     assert called["engine"] == "engine"
     assert isinstance(called["summary"], ArchiveErrorLogsSummary)
+
+
+def test_cli_analyze_errors_dispatch(monkeypatch) -> None:
+    called: dict[str, object] = {}
+    monkeypatch.setattr(cli, "get_settings", _settings)
+    monkeypatch.setattr(cli, "build_engine", lambda settings: called.setdefault("engine", "engine"))
+    monkeypatch.setattr(cli, "configure_logging", lambda level: None)
+    monkeypatch.setattr(
+        cli,
+        "run_analyze_errors",
+        lambda engine, settings, limit, build_id, force: called.setdefault(
+            "summary",
+            AnalyzeErrorsSummary(builds_classified=2),
+        ),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ci-dashboard", "analyze-errors", "--limit", "10", "--build-id", "101", "--force"],
+    )
+
+    assert cli.main() == 0
+    assert called["engine"] == "engine"
+    assert isinstance(called["summary"], AnalyzeErrorsSummary)
+
+
+def test_cli_review_error_dispatch(monkeypatch) -> None:
+    called: dict[str, object] = {}
+    monkeypatch.setattr(cli, "get_settings", _settings)
+    monkeypatch.setattr(cli, "build_engine", lambda settings: called.setdefault("engine", "engine"))
+    monkeypatch.setattr(cli, "configure_logging", lambda level: None)
+    monkeypatch.setattr(
+        cli,
+        "review_error_classification",
+        lambda engine, build_id, l1_category, l2_subcategory: called.setdefault(
+            "summary",
+            ReviewErrorSummary(rows_updated=1),
+        ),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ci-dashboard", "review-error", "--build-id", "101", "--l1", "INFRA", "--l2", "NETWORK"],
+    )
+
+    assert cli.main() == 0
+    assert called["engine"] == "engine"
+    assert isinstance(called["summary"], ReviewErrorSummary)
+
+
+def test_cli_review_error_reports_validation_error(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(cli, "get_settings", _settings)
+    monkeypatch.setattr(cli, "build_engine", lambda settings: "engine")
+    monkeypatch.setattr(cli, "configure_logging", lambda level: None)
+
+    def _raise_value_error(engine, build_id, l1_category, l2_subcategory):
+        del engine, build_id, l1_category, l2_subcategory
+        raise ValueError("review category values must be non-empty")
+
+    monkeypatch.setattr(cli, "review_error_classification", _raise_value_error)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ci-dashboard", "review-error", "--build-id", "101", "--l1", " ", "--l2", "NETWORK"],
+    )
+
+    with pytest.raises(SystemExit, match="2"):
+        cli.main()
+
+    captured = capsys.readouterr()
+    assert "review category values must be non-empty" in captured.err
 
 
 def test_cli_refresh_build_derived_range_dispatch(monkeypatch) -> None:
