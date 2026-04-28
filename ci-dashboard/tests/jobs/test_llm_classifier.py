@@ -34,6 +34,7 @@ def test_openai_compatible_llm_classifier_posts_to_configured_base_url() -> None
         base_url="https://api-vip.codex-for.me/v1",
         model="gpt-5-codex",
         api_key="test-key",
+        reasoning_effort="high",
         default_l1_category="OTHERS",
         default_l2_subcategory="UNCLASSIFIED",
         allowed_classifications=(
@@ -58,6 +59,7 @@ def test_openai_compatible_llm_classifier_posts_to_configured_base_url() -> None
     assert captured["auth"] == "Bearer test-key"
     assert captured["body"] == {
         "model": "gpt-5-codex",
+        "reasoning_effort": "high",
         "messages": [
             {
                 "role": "system",
@@ -108,6 +110,7 @@ def test_openai_compatible_llm_classifier_rejects_unknown_label() -> None:
         base_url="https://api-vip.codex-for.me/v1",
         model="gpt-5-codex",
         api_key="test-key",
+        reasoning_effort=None,
         default_l1_category="OTHERS",
         default_l2_subcategory="UNCLASSIFIED",
         allowed_classifications=(("INFRA", "NETWORK"), ("OTHERS", "UNCLASSIFIED")),
@@ -126,6 +129,41 @@ def test_build_llm_classifier_requires_base_url_for_codex() -> None:
                 model="gpt-5-codex",
                 api_key="test-key",
                 base_url=None,
+            ),
+            default_l1_category="OTHERS",
+            default_l2_subcategory="UNCLASSIFIED",
+            allowed_classifications=(("OTHERS", "UNCLASSIFIED"),),
+        )
+
+
+def test_build_llm_classifier_passes_reasoning_effort() -> None:
+    classifier = build_llm_classifier(
+        LLMSettings(
+            provider="codex",
+            model="gpt-5.4",
+            api_key="test-key",
+            base_url="https://api-vip.codex-for.me/v1",
+            reasoning_effort="high",
+        ),
+        default_l1_category="OTHERS",
+        default_l2_subcategory="UNCLASSIFIED",
+        allowed_classifications=(("OTHERS", "UNCLASSIFIED"),),
+    )
+
+    assert isinstance(classifier, OpenAICompatibleLLMClassifier)
+    assert classifier.model == "gpt-5.4"
+    assert classifier.reasoning_effort == "high"
+
+
+def test_build_llm_classifier_rejects_invalid_reasoning_effort() -> None:
+    with pytest.raises(ValueError, match="CI_DASHBOARD_LLM_REASONING_EFFORT"):
+        build_llm_classifier(
+            LLMSettings(
+                provider="codex",
+                model="gpt-5.4",
+                api_key="test-key",
+                base_url="https://api-vip.codex-for.me/v1",
+                reasoning_effort="extreme",
             ),
             default_l1_category="OTHERS",
             default_l2_subcategory="UNCLASSIFIED",

@@ -86,6 +86,7 @@ class LLMSettings:
     model: str | None = None
     api_key: str | None = None
     base_url: str | None = None
+    reasoning_effort: str | None = None
 
 
 @dataclass(frozen=True)
@@ -176,6 +177,7 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
             model=env.get("CI_DASHBOARD_LLM_MODEL") or None,
             api_key=env.get("CI_DASHBOARD_LLM_API_KEY") or None,
             base_url=env.get("CI_DASHBOARD_LLM_BASE_URL") or None,
+            reasoning_effort=env.get("CI_DASHBOARD_LLM_REASONING_EFFORT") or None,
         ),
         log_level=(env.get("CI_DASHBOARD_LOG_LEVEL") or "INFO").upper(),
     )

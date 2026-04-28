@@ -38,6 +38,7 @@ class OpenAICompatibleLLMClassifier:
     base_url: str
     model: str
     api_key: str
+    reasoning_effort: str | None
     default_l1_category: str
     default_l2_subcategory: str
     allowed_classifications: tuple[tuple[str, str], ...]
@@ -49,6 +50,7 @@ class OpenAICompatibleLLMClassifier:
         response_payload = self._post_chat_completion(
             _build_chat_payload(
                 model=self.model,
+                reasoning_effort=self.reasoning_effort,
                 allowed_classifications=self.allowed_classifications,
                 default_l1_category=self.default_l1_category,
                 default_l2_subcategory=self.default_l2_subcategory,
@@ -100,6 +102,7 @@ def build_llm_classifier(
             base_url=base_url,
             model=model,
             api_key=api_key,
+            reasoning_effort=_normalize_reasoning_effort(settings.reasoning_effort),
             default_l1_category=default_l1_category,
             default_l2_subcategory=default_l2_subcategory,
             allowed_classifications=allowed_classifications,
@@ -126,6 +129,7 @@ def _truncate_log_text(log_text: str, *, max_chars: int) -> str:
 def _build_chat_payload(
     *,
     model: str,
+    reasoning_effort: str | None,
     allowed_classifications: tuple[tuple[str, str], ...],
     default_l1_category: str,
     default_l2_subcategory: str,
@@ -154,13 +158,27 @@ def _build_chat_payload(
         "Redacted console log tail:\n"
         f"{log_text}\n"
     )
-    return {
+    payload = {
         "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
     }
+    if reasoning_effort is not None:
+        payload["reasoning_effort"] = reasoning_effort
+    return payload
+
+
+def _normalize_reasoning_effort(value: str | None) -> str | None:
+    resolved = (value or "").strip().lower()
+    if not resolved:
+        return None
+    if resolved not in {"minimal", "low", "medium", "high"}:
+        raise ValueError(
+            "CI_DASHBOARD_LLM_REASONING_EFFORT must be one of: minimal, low, medium, high"
+        )
+    return resolved
 
 
 def _parse_classification_response(payload: Mapping[str, Any]) -> Mapping[str, Any]:
