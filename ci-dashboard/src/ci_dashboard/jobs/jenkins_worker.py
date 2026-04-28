@@ -171,7 +171,8 @@ INSERT_BUILD_FROM_JENKINS = text(
 UPDATE_BUILD_FROM_JENKINS = text(
     """
     UPDATE ci_l1_builds
-    SET state = :state,
+    SET source_prow_job_id = COALESCE(source_prow_job_id, :source_prow_job_id),
+        state = :state,
         url = COALESCE(url, :url),
         normalized_build_url = COALESCE(normalized_build_url, :normalized_build_url),
         job_name = COALESCE(job_name, :job_name),
@@ -222,6 +223,7 @@ class ParsedJenkinsFinishedEvent:
     event_time: datetime | None
     build_url: str
     normalized_build_url: str
+    source_prow_job_id: str | None
     jenkins_result: str | None
     state: str
     job_name: str | None
@@ -248,7 +250,7 @@ class ParsedJenkinsFinishedEvent:
         return {
             "id": None,
             "source_prow_row_id": None,
-            "source_prow_job_id": None,
+            "source_prow_job_id": self.source_prow_job_id,
             "namespace": None,
             "job_name": self.job_name,
             "job_type": self.job_type,
@@ -517,6 +519,7 @@ def parse_jenkins_finished_event(
     if start_time is None and completion_time is not None and duration_seconds is not None:
         start_time = completion_time - timedelta(seconds=duration_seconds)
     total_seconds = _duration_seconds(start_time, completion_time) or duration_seconds
+    source_prow_job_id = _extract_source_prow_job_id(custom_data, job_spec)
     build_id = _first_non_empty_str(
         custom_data.get("build_id"),
         custom_data.get("buildId"),
@@ -530,6 +533,7 @@ def parse_jenkins_finished_event(
         event_time=envelope.event_time,
         build_url=build_url,
         normalized_build_url=normalized_build_url,
+        source_prow_job_id=source_prow_job_id,
         jenkins_result=jenkins_result,
         state=state,
         job_name=job_name,
@@ -583,11 +587,11 @@ def _upsert_build_from_jenkins_event(connection: Connection, parsed: ParsedJenki
     existing_by_prow_job_id, existing_by_build_url = fetch_existing_build_targets(
         connection,
         normalized_build_urls=[parsed.normalized_build_url],
-        source_prow_job_ids=[],
+        source_prow_job_ids=[parsed.source_prow_job_id] if parsed.source_prow_job_id else [],
     )
     target_id = resolve_merge_target_id(
         normalized_build_url=parsed.normalized_build_url,
-        source_prow_job_id=None,
+        source_prow_job_id=parsed.source_prow_job_id,
         existing_by_prow_job_id=existing_by_prow_job_id,
         existing_by_build_url=existing_by_build_url,
         log_context={"job_name": JOB_NAME},
@@ -748,6 +752,18 @@ def _extract_job_spec(custom_data: Mapping[str, Any]) -> dict[str, Any] | None:
     if not isinstance(parsed, Mapping):
         return None
     return dict(parsed)
+
+
+def _extract_source_prow_job_id(
+    custom_data: Mapping[str, Any],
+    job_spec: Mapping[str, Any] | None,
+) -> str | None:
+    return _first_non_empty_str(
+        custom_data.get("PROW_JOB_ID"),
+        custom_data.get("prow_job_id"),
+        _nested_get(custom_data, "build", "parameters", "PROW_JOB_ID"),
+        job_spec.get("prowjobid") if job_spec else None,
+    )
 
 
 def _first_mapping(value: Any) -> dict[str, Any]:

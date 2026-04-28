@@ -144,6 +144,7 @@ def test_parse_jenkins_finished_event_supports_real_plugin_payload() -> None:
 
     assert parsed.build_url == "https://prow.tidb.net/jenkins/job/pingcap/job/tidb/job/pull_mysql_client_test/1816/"
     assert parsed.normalized_build_url == "https://prow.tidb.net/jenkins/job/pingcap/job/tidb/job/pull_mysql_client_test/1816/"
+    assert parsed.source_prow_job_id == "3bfe389c-e361-4a6d-a1d6-679fb87b0e13"
     assert parsed.jenkins_result == "SUCCESS"
     assert parsed.state == "success"
     assert parsed.job_name == "pull_mysql_client_test"
@@ -210,7 +211,7 @@ def test_process_jenkins_event_message_inserts_real_plugin_payload(sqlite_engine
         build = connection.execute(
             text(
                 """
-                SELECT state, url, normalized_build_url, job_type, repo_full_name, pr_number, author, head_sha, build_system, cloud_phase
+                SELECT source_prow_job_id, state, url, normalized_build_url, job_type, repo_full_name, pr_number, author, head_sha, build_system, cloud_phase
                 FROM ci_l1_builds
                 """
             )
@@ -224,6 +225,7 @@ def test_process_jenkins_event_message_inserts_real_plugin_payload(sqlite_engine
             )
         ).mappings().one()
 
+    assert build["source_prow_job_id"] == "3bfe389c-e361-4a6d-a1d6-679fb87b0e13"
     assert build["state"] == "success"
     assert build["url"] == "https://prow.tidb.net/jenkins/job/pingcap/job/tidb/job/pull_mysql_client_test/1816/"
     assert build["normalized_build_url"] == "https://prow.tidb.net/jenkins/job/pingcap/job/tidb/job/pull_mysql_client_test/1816/"
@@ -288,6 +290,64 @@ def test_process_jenkins_event_message_enriches_existing_prow_row_without_cleari
     assert row["job_type"] == "presubmit"
     assert row["repo_full_name"] == "pingcap/tidb"
     assert row["state"] == "failure"
+
+
+def test_process_jenkins_event_message_uses_prow_job_id_to_resolve_duplicate_build_urls(sqlite_engine) -> None:
+    with sqlite_engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO ci_l1_builds (
+                  source_prow_row_id, source_prow_job_id, namespace, job_name, job_type, state,
+                  optional, report, org, repo, repo_full_name, base_ref, pr_number, is_pr_build,
+                  context, url, normalized_build_url, author, start_time, completion_time,
+                  total_seconds, head_sha, target_branch, cloud_phase, build_system
+                ) VALUES
+                (
+                  111, 'different-prow-job', 'prow', 'pull_mysql_client_test', 'presubmit', 'aborted',
+                  0, 1, 'pingcap', 'tidb', 'pingcap/tidb', 'master', 65626, 1,
+                  'unit', 'https://prow.tidb.net/jenkins/job/pingcap/job/tidb/job/pull_mysql_client_test/1816/display/redirect',
+                  'https://prow.tidb.net/jenkins/job/pingcap/job/tidb/job/pull_mysql_client_test/1816/',
+                  'alice', '2026-04-27 13:00:00', '2026-04-27 13:05:00',
+                  300, 'deadbeef', 'master', 'GCP', 'JENKINS'
+                ),
+                (
+                  222, '3bfe389c-e361-4a6d-a1d6-679fb87b0e13', 'prow', 'pull_mysql_client_test', 'presubmit', 'pending',
+                  0, 1, 'pingcap', 'tidb', 'pingcap/tidb', 'master', 65626, 1,
+                  'unit', 'https://prow.tidb.net/jenkins/job/pingcap/job/tidb/job/pull_mysql_client_test/1816/display/redirect',
+                  'https://prow.tidb.net/jenkins/job/pingcap/job/tidb/job/pull_mysql_client_test/1816/',
+                  'terry1purcell', '2026-04-27 13:00:00', NULL,
+                  NULL, 'e6030436c2093b30da167ca295887b8df8eaeb07', 'master', 'IDC', 'UNKNOWN'
+                )
+                """
+            )
+        )
+
+    result = process_jenkins_event_message(sqlite_engine, _settings(), _real_jenkins_plugin_finished_event_payload())
+
+    assert result == "processed"
+
+    with sqlite_engine.begin() as connection:
+        rows = list(
+            connection.execute(
+                text(
+                    """
+                    SELECT source_prow_row_id, source_prow_job_id, state, completion_time, build_system, cloud_phase
+                    FROM ci_l1_builds
+                    ORDER BY source_prow_row_id
+                    """
+                )
+            ).mappings()
+        )
+
+    assert len(rows) == 2
+    assert rows[0]["source_prow_job_id"] == "different-prow-job"
+    assert rows[0]["state"] == "aborted"
+    assert rows[1]["source_prow_job_id"] == "3bfe389c-e361-4a6d-a1d6-679fb87b0e13"
+    assert rows[1]["state"] == "success"
+    assert rows[1]["completion_time"] is not None
+    assert rows[1]["build_system"] == "JENKINS"
+    assert rows[1]["cloud_phase"] == "GCP"
 
 
 def test_process_jenkins_event_message_skips_duplicate_processed_event(sqlite_engine) -> None:
