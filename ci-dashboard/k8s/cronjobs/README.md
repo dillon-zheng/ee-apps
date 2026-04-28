@@ -196,7 +196,8 @@ Useful overrides:
 - `--schedule "35 * * * *"` keeps the default hourly archive cadence.
 - `--build-limit 100` caps one run's Jenkins and GCS load.
 - `--log-tail-bytes 262144` keeps the default tail size at 256 KiB.
-- `--gcs-prefix ci-dashboard/v3/jenkins-logs` keeps artifacts under one dedicated prefix.
+- default object layout is `YYMM/<build_id>.log`, for example `2604/1682039.log`.
+- `--gcs-prefix ci-dashboard/jenkins` is optional if we later want an extra stable prefix in front of the month folder.
 - `--jenkins-secret <secret>` enables server-side Jenkins auth if console access is later restricted.
 - `--suspend true` is recommended until GCS write permission is confirmed.
 

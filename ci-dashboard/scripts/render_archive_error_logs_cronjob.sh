@@ -8,7 +8,7 @@ schedule="35 * * * *"
 time_zone="Asia/Shanghai"
 db_secret="ci-dashboard-db"
 gcs_bucket=""
-gcs_prefix="ci-dashboard/v3/jenkins-logs"
+gcs_prefix=""
 jenkins_internal_base_url=""
 build_limit="100"
 log_tail_bytes="262144"
@@ -47,7 +47,7 @@ Optional:
   --time-zone TZ                  CronJob timeZone. Default: Asia/Shanghai
   --db-secret NAME                Secret containing TIDB_* or CI_DASHBOARD_DB_URL. Default: ci-dashboard-db
   --gcs-bucket NAME               GCS bucket for archived logs. Required.
-  --gcs-prefix PATH               GCS object prefix. Default: ci-dashboard/v3/jenkins-logs
+  --gcs-prefix PATH               Optional GCS object prefix. Default: empty.
   --jenkins-internal-base-url URL Internal Jenkins base URL. Required.
   --build-limit N                 Max builds archived per run. Default: 100
   --log-tail-bytes N              Tail byte cap. Default: 262144
@@ -279,6 +279,15 @@ EOF
 )
 fi
 
+gcs_prefix_env_block=""
+if [[ -n "${gcs_prefix}" ]]; then
+  gcs_prefix_env_block=$(cat <<EOF
+                - name: CI_DASHBOARD_GCS_PREFIX
+                  value: ${gcs_prefix}
+EOF
+)
+fi
+
 cat <<EOF
 apiVersion: batch/v1
 kind: CronJob
@@ -326,8 +335,7 @@ ${service_account_block}
                   value: ${log_level}
                 - name: CI_DASHBOARD_GCS_BUCKET
                   value: ${gcs_bucket}
-                - name: CI_DASHBOARD_GCS_PREFIX
-                  value: ${gcs_prefix}
+${gcs_prefix_env_block}
                 - name: CI_DASHBOARD_ARCHIVE_LOG_TAIL_BYTES
                   value: "${log_tail_bytes}"
                 - name: CI_DASHBOARD_JENKINS_INTERNAL_BASE_URL

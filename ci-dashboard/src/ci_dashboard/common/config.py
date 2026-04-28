@@ -77,7 +77,7 @@ class ArchiveSettings:
     build_limit: int = 100
     log_tail_bytes: int = 262144
     gcs_bucket: str | None = None
-    gcs_prefix: str = "ci-dashboard/v3/jenkins-logs"
+    gcs_prefix: str = ""
 
 
 @dataclass(frozen=True)
@@ -160,9 +160,7 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
             build_limit=_read_int(env, "CI_DASHBOARD_ARCHIVE_BUILD_LIMIT", 100),
             log_tail_bytes=_read_int(env, "CI_DASHBOARD_ARCHIVE_LOG_TAIL_BYTES", 262144),
             gcs_bucket=env.get("CI_DASHBOARD_GCS_BUCKET") or None,
-            gcs_prefix=(
-                (env.get("CI_DASHBOARD_GCS_PREFIX") or "ci-dashboard/v3/jenkins-logs").strip("/")
-            ),
+            gcs_prefix=(env.get("CI_DASHBOARD_GCS_PREFIX") or "").strip("/"),
         ),
         log_level=(env.get("CI_DASHBOARD_LOG_LEVEL") or "INFO").upper(),
     )

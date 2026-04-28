@@ -28,7 +28,7 @@ def test_load_settings_supports_db_url() -> None:
             "CI_DASHBOARD_ARCHIVE_BUILD_LIMIT": "77",
             "CI_DASHBOARD_ARCHIVE_LOG_TAIL_BYTES": "65536",
             "CI_DASHBOARD_GCS_BUCKET": "ci-dashboard-prod",
-            "CI_DASHBOARD_GCS_PREFIX": "ci-dashboard/v3/custom-prefix",
+            "CI_DASHBOARD_GCS_PREFIX": "ci-dashboard/custom-prefix",
             "CI_DASHBOARD_LOG_LEVEL": "debug",
         }
     )
@@ -50,7 +50,7 @@ def test_load_settings_supports_db_url() -> None:
     assert settings.archive.build_limit == 77
     assert settings.archive.log_tail_bytes == 65536
     assert settings.archive.gcs_bucket == "ci-dashboard-prod"
-    assert settings.archive.gcs_prefix == "ci-dashboard/v3/custom-prefix"
+    assert settings.archive.gcs_prefix == "ci-dashboard/custom-prefix"
     assert settings.log_level == "DEBUG"
 
 
