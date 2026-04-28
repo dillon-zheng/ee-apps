@@ -293,12 +293,15 @@ def main() -> int:
         if args.build_id <= 0:
             parser.error("--build-id must be positive")
         engine = build_engine(settings)
-        summary = review_error_classification(
-            engine,
-            build_id=args.build_id,
-            l1_category=args.l1,
-            l2_subcategory=args.l2,
-        )
+        try:
+            summary = review_error_classification(
+                engine,
+                build_id=args.build_id,
+                l1_category=args.l1,
+                l2_subcategory=args.l2,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
         logging.getLogger(__name__).info(
             "review-error finished",
             extra={"summary": summary.__dict__},

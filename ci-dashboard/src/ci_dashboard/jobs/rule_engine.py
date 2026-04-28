@@ -11,7 +11,7 @@ from ci_dashboard.common.models import ErrorClassification
 
 
 def default_taxonomy_path() -> Path:
-    resource = files("ci_dashboard.jobs").joinpath("error_taxonomy.yaml")
+    resource = files("ci_dashboard.jobs").joinpath("error_taxonomy.json")
     return Path(str(resource))
 
 

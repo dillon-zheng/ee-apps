@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
+import pytest
+
 from ci_dashboard.common.config import DatabaseSettings, JobSettings, Settings
 from ci_dashboard.common.models import (
     AnalyzeErrorsSummary,
@@ -277,6 +279,28 @@ def test_cli_review_error_dispatch(monkeypatch) -> None:
     assert cli.main() == 0
     assert called["engine"] == "engine"
     assert isinstance(called["summary"], ReviewErrorSummary)
+
+
+def test_cli_review_error_reports_validation_error(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(cli, "get_settings", _settings)
+    monkeypatch.setattr(cli, "build_engine", lambda settings: "engine")
+    monkeypatch.setattr(cli, "configure_logging", lambda level: None)
+
+    def _raise_value_error(engine, build_id, l1_category, l2_subcategory):
+        del engine, build_id, l1_category, l2_subcategory
+        raise ValueError("review category values must be non-empty")
+
+    monkeypatch.setattr(cli, "review_error_classification", _raise_value_error)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ci-dashboard", "review-error", "--build-id", "101", "--l1", " ", "--l2", "NETWORK"],
+    )
+
+    with pytest.raises(SystemExit, match="2"):
+        cli.main()
+
+    captured = capsys.readouterr()
+    assert "review category values must be non-empty" in captured.err
 
 
 def test_cli_refresh_build_derived_range_dispatch(monkeypatch) -> None:

@@ -227,7 +227,7 @@ ci-dashboard archive-error-logs --build-id 12345 --force
 1. `src/ci_dashboard/jobs/analyze_errors.py`
 2. `src/ci_dashboard/jobs/llm_classifier.py`
 3. `src/ci_dashboard/jobs/rule_engine.py`
-4. taxonomy file `error_taxonomy.yaml`
+4. taxonomy file `error_taxonomy.json`
 5. CLI path for human revise
 
 ### 6.2 Classification Responsibilities
