@@ -254,6 +254,79 @@ def _insert_flaky_issue(
         )
 
 
+def _insert_flaky_issue_pr_link(
+    sqlite_engine,
+    *,
+    issue_repo: str,
+    issue_number: int,
+    pr_repo: str,
+    pr_number: int,
+    linked_at: str,
+) -> None:
+    with sqlite_engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO ci_l1_flaky_issue_pr_links (
+                  issue_repo, issue_number, pr_repo, pr_number, pr_url, pr_title,
+                  link_type, source_event_type, source_event_id, linked_at, source_ticket_updated_at
+                ) VALUES (
+                  :issue_repo, :issue_number, :pr_repo, :pr_number, :pr_url, :pr_title,
+                  'linked_pull_request', 'cross-referenced', NULL, :linked_at, :linked_at
+                )
+                """
+            ),
+            {
+                "issue_repo": issue_repo,
+                "issue_number": issue_number,
+                "pr_repo": pr_repo,
+                "pr_number": pr_number,
+                "pr_url": f"https://github.com/{pr_repo}/pull/{pr_number}",
+                "pr_title": f"Fix flaky issue #{issue_number}",
+                "linked_at": linked_at,
+            },
+        )
+
+
+def _insert_pull_ticket(
+    sqlite_engine,
+    *,
+    repo: str,
+    number: int,
+    state: str,
+    created_at: str,
+    updated_at: str | None = None,
+    closed_at: str | None = None,
+    merged: int = 0,
+    merged_at: str | None = None,
+) -> None:
+    with sqlite_engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO github_tickets (
+                  type, repo, number, title, body, comments, state, created_at, updated_at,
+                  closed_at, merged, merged_at, review, review_comments, timeline, branches
+                ) VALUES (
+                  'pull', :repo, :number, :title, NULL, '[]', :state, :created_at, :updated_at,
+                  :closed_at, :merged, :merged_at, '[]', '[]', '[]', NULL
+                )
+                """
+            ),
+            {
+                "repo": repo,
+                "number": number,
+                "title": f"PR {number}",
+                "state": state,
+                "created_at": created_at,
+                "updated_at": updated_at or closed_at or created_at,
+                "closed_at": closed_at,
+                "merged": merged,
+                "merged_at": merged_at,
+            },
+        )
+
+
 def _insert_job_state(
     sqlite_engine,
     *,
@@ -641,7 +714,7 @@ def test_frontend_uses_configured_static_dir(tmp_path: Path, monkeypatch) -> Non
     assert response.text == "configured-ok"
 
 
-def test_status_and_filter_endpoints(api_client: TestClient) -> None:
+def test_status_and_filter_endpoints(api_client: TestClient, sqlite_engine) -> None:
     freshness = api_client.get("/api/v1/status/freshness")
     assert freshness.status_code == 200
     freshness_body = freshness.json()
@@ -667,17 +740,97 @@ def test_status_and_filter_endpoints(api_client: TestClient) -> None:
         {"value": "master", "label": "master"},
     ]
 
+    _insert_build(
+        sqlite_engine,
+        source_prow_row_id=900,
+        source_prow_job_id="job-900",
+        repo_full_name="pingcap/tidb",
+        target_branch="master",
+        base_ref="master",
+        job_name="pingcap-integration-test",
+        state="success",
+        cloud_phase="GCP",
+        is_flaky=0,
+        is_retry_loop=0,
+        failure_category=None,
+        start_time="2026-04-12 09:00:00",
+        queue_wait_seconds=20,
+        run_seconds=120,
+        total_seconds=140,
+        pr_number=120,
+    )
+    _insert_build(
+        sqlite_engine,
+        source_prow_row_id=901,
+        source_prow_job_id="job-901",
+        repo_full_name="pingcap/tidb",
+        target_branch="master",
+        base_ref="master",
+        job_name="tikv-copr-unit",
+        state="success",
+        cloud_phase="IDC",
+        is_flaky=0,
+        is_retry_loop=0,
+        failure_category=None,
+        start_time="2026-04-12 09:10:00",
+        queue_wait_seconds=25,
+        run_seconds=180,
+        total_seconds=205,
+        pr_number=121,
+    )
+    _insert_build(
+        sqlite_engine,
+        source_prow_row_id=902,
+        source_prow_job_id="job-902",
+        repo_full_name="pingcap/tidb",
+        target_branch="master",
+        base_ref="master",
+        job_name="tidbcloud-smoke-suite",
+        state="success",
+        cloud_phase="GCP",
+        is_flaky=0,
+        is_retry_loop=0,
+        failure_category=None,
+        start_time="2026-04-12 09:20:00",
+        queue_wait_seconds=15,
+        run_seconds=240,
+        total_seconds=255,
+        pr_number=122,
+    )
+    _insert_build(
+        sqlite_engine,
+        source_prow_row_id=903,
+        source_prow_job_id="job-903",
+        repo_full_name="pingcap/tidb",
+        target_branch="master",
+        base_ref="master",
+        job_name="misc-nightly-job",
+        state="success",
+        cloud_phase="GCP",
+        is_flaky=0,
+        is_retry_loop=0,
+        failure_category=None,
+        start_time="2026-04-12 09:30:00",
+        queue_wait_seconds=10,
+        run_seconds=60,
+        total_seconds=70,
+        pr_number=123,
+    )
+
     jobs = api_client.get(
         "/api/v1/filters/jobs",
-        params={"repo": "pingcap/tidb", "branch": "master"},
+        params={
+            "repo": "pingcap/tidb",
+            "branch": "master",
+            "start_date": "2026-04-12",
+            "end_date": "2026-04-12",
+        },
     )
     assert jobs.status_code == 200
     assert jobs.json()["items"] == [
-        {"value": "job-a", "label": "job-a"},
-        {"value": "job-b", "label": "job-b"},
-        {"value": "job-c", "label": "job-c"},
-        {"value": "job-fast", "label": "job-fast"},
-        {"value": "job-slow", "label": "job-slow"},
+        {"value": "pingcap-integration-test", "label": "pingcap-integration-test"},
+        {"value": "tidbcloud-smoke-suite", "label": "tidbcloud-smoke-suite"},
+        {"value": "tikv-copr-unit", "label": "tikv-copr-unit"},
     ]
 
     cloud_phases = api_client.get("/api/v1/filters/cloud-phases")
@@ -1143,6 +1296,83 @@ def test_case_tables_exclude_cross_cloud_and_stale_build_key_collisions(sqlite_e
         app.dependency_overrides.clear()
 
 
+def test_distinct_case_counts_match_legacy_do_host_case_runs(sqlite_engine) -> None:
+    _insert_build(
+        sqlite_engine,
+        source_prow_row_id=910,
+        source_prow_job_id="legacy-idc-build",
+        repo_full_name="pingcap/tidb",
+        target_branch="master",
+        base_ref="master",
+        job_name="legacy-job",
+        state="success",
+        cloud_phase="IDC",
+        is_flaky=0,
+        is_retry_loop=0,
+        failure_category=None,
+        start_time="2026-03-23 15:08:10",
+        pr_number=910,
+        normalized_build_url="https://prow.tidb.net/jenkins/job/pingcap/job/tidb/job/ghpr_unit_test/54603/",
+        build_id="prow-legacy-idc",
+    )
+    _insert_pr_event(
+        sqlite_engine,
+        repo="pingcap/tidb",
+        pr_number=910,
+        target_branch="master",
+        event_key="pr-910-master",
+        event_time="2026-03-23 15:05:00",
+    )
+    _insert_problem_case_run(
+        sqlite_engine,
+        repo="pingcap/tidb",
+        branch="master",
+        case_name="TestLegacyDoHost",
+        build_url="https://do.pingcap.net/jenkins/job/pingcap/job/tidb/job/ghpr_unit_test/54603/",
+        flaky=1,
+        report_time="2026-03-23 15:20:00",
+    )
+    _insert_flaky_issue(
+        sqlite_engine,
+        repo="pingcap/tidb",
+        issue_number=70010,
+        case_name="TestLegacyDoHost",
+        issue_branch="master",
+        issue_status="open",
+        issue_created_at="2026-03-23 16:00:00",
+    )
+
+    app.dependency_overrides[get_engine] = lambda: sqlite_engine
+    try:
+        with TestClient(app) as client:
+            distinct_counts = client.get(
+                "/api/v1/flaky/distinct-case-counts",
+                params={
+                    "repo": "pingcap/tidb",
+                    "branch": "master",
+                    "start_date": "2026-03-23",
+                    "end_date": "2026-03-23",
+                },
+            )
+            assert distinct_counts.status_code == 200
+            assert distinct_counts.json()["rows"] == [{"branch": "master", "values": [1]}]
+
+            issue_weekly_rates = client.get(
+                "/api/v1/flaky/issue-weekly-rates",
+                params={
+                    "repo": "pingcap/tidb",
+                    "branch": "master",
+                    "start_date": "2026-03-23",
+                    "end_date": "2026-03-23",
+                },
+            )
+            assert issue_weekly_rates.status_code == 200
+            rows = {row["case_name"]: row for row in issue_weekly_rates.json()["rows"]}
+            assert rows["TestLegacyDoHost"]["cells"] == ["100.00% (1/1)"]
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_flaky_validation_errors(api_client: TestClient) -> None:
     invalid_granularity = api_client.get(
         "/api/v1/flaky/trend",
@@ -1184,10 +1414,36 @@ def test_build_routes(api_client: TestClient) -> None:
         },
     )
     assert outcome_trend.status_code == 200
-    outcome_series = {item["key"]: item for item in outcome_trend.json()["series"]}
+    outcome_body = outcome_trend.json()
+    outcome_series = {item["key"]: item for item in outcome_body["series"]}
     assert outcome_series["total_count"]["points"] == [["2026-04-10", 3], ["2026-04-11", 2]]
     assert outcome_series["success_rate_pct"]["axis"] == "right"
     assert outcome_series["success_rate_pct"]["points"] == [["2026-04-10", 33.33], ["2026-04-11", 0.0]]
+    assert outcome_body["meta"]["summary"] == {
+        "total_count": 5,
+        "success_count": 1,
+        "failure_count": 4,
+        "success_rate_pct": 20.0,
+    }
+
+    outcome_multi_job = api_client.get(
+        "/api/v1/builds/outcome-trend",
+        params={
+            "repo": "pingcap/tidb",
+            "branch": "master",
+            "job_name": "job-a,job-b",
+            "start_date": "2026-04-10",
+            "end_date": "2026-04-11",
+        },
+    )
+    assert outcome_multi_job.status_code == 200
+    outcome_multi_job_summary = outcome_multi_job.json()["meta"]["summary"]
+    assert outcome_multi_job_summary == {
+        "total_count": 4,
+        "success_count": 1,
+        "failure_count": 3,
+        "success_rate_pct": 25.0,
+    }
 
     duration_trend = api_client.get(
         "/api/v1/builds/duration-trend",
@@ -1521,6 +1777,18 @@ def test_page_routes(api_client: TestClient) -> None:
 
 
 def test_weekly_series_skip_partial_boundary_weeks(api_client: TestClient) -> None:
+    outcome_day = api_client.get(
+        "/api/v1/builds/outcome-trend",
+        params={
+            "repo": "pingcap/tidb",
+            "branch": "master",
+            "granularity": "day",
+            "start_date": "2026-03-01",
+            "end_date": "2026-04-15",
+        },
+    )
+    assert outcome_day.status_code == 200
+
     outcome = api_client.get(
         "/api/v1/builds/outcome-trend",
         params={
@@ -1540,6 +1808,7 @@ def test_weekly_series_skip_partial_boundary_weeks(api_client: TestClient) -> No
         ["2026-03-30", 100.0],
         ["2026-04-06", 42.86],
     ]
+    assert outcome.json()["meta"]["summary"] == outcome_day.json()["meta"]["summary"]
 
     ci_status = api_client.get(
         "/api/v1/pages/ci-status",
@@ -1626,8 +1895,122 @@ def test_flaky_page_issue_lifecycle_snapshot_ignores_issue_status_filter(
     created_by_week = {week: count for week, count in weekly_series["issue_created_count"]}
     closed_by_week = {week: count for week, count in weekly_series["issue_closed_count"]}
     reopened_by_week = {week: count for week, count in weekly_series["issue_reopened_count"]}
+    open_by_week = {week: count for week, count in weekly_series["issue_open_count"]}
 
     assert created_by_week["2026-03-30"] >= 1
     assert created_by_week["2026-04-13"] >= 2
     assert closed_by_week["2026-04-13"] >= 1
     assert reopened_by_week["2026-04-13"] >= 1
+    assert open_by_week["2026-03-30"] >= 1
+    assert open_by_week["2026-04-13"] == 3
+
+
+def test_flaky_page_issue_fix_progress_snapshot(
+    sqlite_engine,
+    api_client: TestClient,
+) -> None:
+    _insert_flaky_issue(
+        sqlite_engine,
+        repo="pingcap/tidb",
+        issue_number=71001,
+        case_name="SnapshotCaseOne",
+        issue_branch="master",
+        issue_status="open",
+        issue_created_at="2026-04-05 10:00:00",
+    )
+    _insert_flaky_issue(
+        sqlite_engine,
+        repo="pingcap/tidb",
+        issue_number=71002,
+        case_name="SnapshotCaseTwo",
+        issue_branch="master",
+        issue_status="closed",
+        issue_created_at="2026-04-14 09:00:00",
+        issue_closed_at="2026-04-24 11:00:00",
+    )
+    _insert_flaky_issue(
+        sqlite_engine,
+        repo="pingcap/tidb",
+        issue_number=71003,
+        case_name="SnapshotCaseThree",
+        issue_branch="master",
+        issue_status="open",
+        issue_created_at="2026-04-23 12:00:00",
+    )
+
+    _insert_flaky_issue_pr_link(
+        sqlite_engine,
+        issue_repo="pingcap/tidb",
+        issue_number=71001,
+        pr_repo="pingcap/tidb",
+        pr_number=72001,
+        linked_at="2026-04-06 10:00:00",
+    )
+    _insert_flaky_issue_pr_link(
+        sqlite_engine,
+        issue_repo="pingcap/tidb",
+        issue_number=71002,
+        pr_repo="pingcap/tidb",
+        pr_number=72002,
+        linked_at="2026-04-18 10:00:00",
+    )
+    _insert_flaky_issue_pr_link(
+        sqlite_engine,
+        issue_repo="pingcap/tidb",
+        issue_number=71003,
+        pr_repo="pingcap/tidb",
+        pr_number=72003,
+        linked_at="2026-04-24 10:00:00",
+    )
+
+    _insert_pull_ticket(
+        sqlite_engine,
+        repo="pingcap/tidb",
+        number=72001,
+        state="open",
+        created_at="2026-04-06 10:30:00",
+    )
+    _insert_pull_ticket(
+        sqlite_engine,
+        repo="pingcap/tidb",
+        number=72002,
+        state="closed",
+        created_at="2026-04-18 10:30:00",
+        closed_at="2026-04-24 13:00:00",
+        merged=1,
+        merged_at="2026-04-24 13:00:00",
+    )
+    _insert_pull_ticket(
+        sqlite_engine,
+        repo="pingcap/tidb",
+        number=72003,
+        state="open",
+        created_at="2026-04-24 10:30:00",
+    )
+
+    response = api_client.get(
+        "/api/v1/pages/flaky",
+        params={
+            "repo": "pingcap/tidb",
+            "branch": "master",
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-29",
+        },
+    )
+
+    assert response.status_code == 200
+    progress = response.json()["issue_fix_progress"]
+    assert progress["meta"]["as_of_date"] == "2026-04-29"
+    assert progress["meta"]["comparison_as_of_date"] == "2026-04-22"
+    assert progress["meta"]["ignores_start_date"] is True
+    assert progress["meta"]["ignores_job_name"] is True
+    assert progress["meta"]["ignores_cloud_phase"] is True
+    assert progress["meta"]["ignores_issue_status"] is True
+    assert progress["filed_issue_count"] == 5
+    assert progress["filed_issue_delta"] == 1
+    assert progress["fixed_issue_count"] == 2
+    assert progress["fixed_issue_delta"] == 1
+    assert progress["in_review_pr_count"] == 2
+    assert progress["in_review_pr_delta"] == 0
+    assert progress["merged_pr_count"] == 1
+    assert progress["merged_pr_delta"] == 1

@@ -266,12 +266,6 @@ select {
   min-width: 0;
 }
 
-.filter-field--job {
-  width: 100%;
-  max-width: 24rem;
-  justify-self: start;
-}
-
 .ghost-button {
   cursor: pointer;
   min-width: 96px;
@@ -363,6 +357,12 @@ select {
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.9rem;
+}
+
+.progress-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.9rem;
 }
 
@@ -535,6 +535,94 @@ select {
   font-weight: 600;
 }
 
+.progress-card {
+  display: grid;
+  gap: 0.9rem;
+  padding: 1rem 1.05rem;
+  border-radius: 24px;
+  border: 1px solid rgba(49, 87, 114, 0.08);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 251, 244, 0.88));
+}
+
+.progress-card--teal {
+  background: linear-gradient(180deg, rgba(15, 124, 130, 0.14), rgba(255, 251, 244, 0.9));
+}
+
+.progress-card--rose {
+  background: linear-gradient(180deg, rgba(200, 79, 93, 0.13), rgba(255, 251, 244, 0.9));
+}
+
+.progress-card__header {
+  display: grid;
+  gap: 0.28rem;
+}
+
+.progress-card__title {
+  color: var(--navy);
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.progress-card__subtitle {
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.progress-card__rows {
+  display: grid;
+  gap: 0.78rem;
+}
+
+.progress-card__row {
+  display: grid;
+  gap: 0.28rem;
+  padding-top: 0.78rem;
+  border-top: 1px solid rgba(49, 87, 114, 0.1);
+}
+
+.progress-card__row:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.progress-card__row-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.progress-card__metric-label {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.progress-card__metric-value {
+  color: var(--ink);
+  font-size: clamp(1.7rem, 2vw, 2.35rem);
+  line-height: 1;
+}
+
+.progress-card__metric-delta {
+  color: var(--ink);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.progress-card__state {
+  display: flex;
+  align-items: center;
+  min-height: 112px;
+  color: var(--muted);
+}
+
+.progress-card__state--error {
+  color: var(--rose);
+}
+
 .page-grid {
   display: grid;
   gap: 1rem;
@@ -548,12 +636,29 @@ select {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.flaky-highlight-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  align-items: stretch;
+}
+
+.flaky-highlight-stack {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
 .panel {
   display: grid;
   gap: 0.9rem;
   padding: 1rem 1.05rem 1.1rem;
   border-radius: 28px;
   min-width: 0;
+}
+
+.panel--full-height {
+  height: 100%;
 }
 
 .panel__header {
@@ -1416,7 +1521,9 @@ select {
   }
 
   .stats-grid,
+  .progress-summary-grid,
   .page-grid--overview,
+  .flaky-highlight-row,
   .page-grid--two-column {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1445,7 +1552,10 @@ select {
 
   .filter-grid,
   .stats-grid,
+  .progress-summary-grid,
   .page-grid--overview,
+  .flaky-highlight-row,
+  .flaky-highlight-stack,
   .page-grid--two-column,
   .comparison-metrics,
   .period-card dl {

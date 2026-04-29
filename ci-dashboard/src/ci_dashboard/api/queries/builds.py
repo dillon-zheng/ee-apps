@@ -72,6 +72,24 @@ def get_outcome_trend(engine: Engine, filters: CommonFilters) -> dict[str, Any]:
             failure_points.append([bucket_start, failure])
             rate_points.append([bucket_start, rate_pct(success, total)])
 
+        summary = connection.execute(
+            text(
+                f"""
+                SELECT
+                  COUNT(*) AS total_count,
+                  SUM(CASE WHEN {success_where} THEN 1 ELSE 0 END) AS success_count,
+                  SUM(CASE WHEN {failure_like_where} THEN 1 ELSE 0 END) AS failure_count
+                FROM {builds_table}
+                WHERE {where_clause}
+                """
+            ),
+            params,
+        ).mappings().one()
+
+        summary_total = int(summary["total_count"] or 0)
+        summary_success = int(summary["success_count"] or 0)
+        summary_failure = int(summary["failure_count"] or 0)
+
     return {
         "series": [
             {"key": "total_count", "type": "bar", "axis": "left", "points": total_points},
@@ -79,7 +97,15 @@ def get_outcome_trend(engine: Engine, filters: CommonFilters) -> dict[str, Any]:
             {"key": "failure_count", "type": "bar", "axis": "left", "points": failure_points},
             {"key": "success_rate_pct", "type": "line", "axis": "right", "points": rate_points},
         ],
-        "meta": filters.meta(),
+        "meta": {
+            **filters.meta(),
+            "summary": {
+                "total_count": summary_total,
+                "success_count": summary_success,
+                "failure_count": summary_failure,
+                "success_rate_pct": rate_pct(summary_success, summary_total),
+            },
+        },
     }
 
 

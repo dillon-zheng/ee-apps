@@ -175,7 +175,12 @@ UPDATE_BUILD_FROM_JENKINS = text(
         state = :state,
         url = COALESCE(url, :url),
         normalized_build_url = COALESCE(normalized_build_url, :normalized_build_url),
-        job_name = COALESCE(job_name, :job_name),
+        job_name = CASE
+          WHEN :job_name IS NULL THEN job_name
+          WHEN job_name IS NULL OR job_name = '' THEN :job_name
+          WHEN INSTR(job_name, '/') = 0 AND INSTR(:job_name, '/') > 0 THEN :job_name
+          ELSE job_name
+        END,
         job_type = COALESCE(job_type, :job_type),
         org = COALESCE(org, :org),
         repo = COALESCE(repo, :repo),
@@ -441,16 +446,6 @@ def parse_jenkins_finished_event(
     job_spec_first_pull = _first_mapping(job_spec_refs.get("pulls"))
     job_spec_org = _first_non_empty_str(job_spec_refs.get("org"), build_url_org)
     job_spec_repo = _first_non_empty_str(job_spec_refs.get("repo"), build_url_repo)
-    job_name = _first_non_empty_str(
-        custom_data.get("job_name"),
-        custom_data.get("jobName"),
-        custom_data.get("name"),
-        custom_data.get("displayName"),
-        custom_data.get("pipelineName"),
-        _nested_get(data, "subject", "content", "pipelineName"),
-        _extract_job_name_from_build_url(normalized_build_url),
-    )
-
     jenkins_result = _extract_result(data, custom_data)
     state = map_jenkins_result_to_state(jenkins_result)
 
@@ -478,6 +473,17 @@ def parse_jenkins_finished_event(
     org, repo, repo_full_name = _normalize_repo_fields(org, repo_candidate, repo_full_name)
     if repo_full_name is None and org and repo:
         repo_full_name = f"{org}/{repo}"
+    job_name = _first_non_empty_str(
+        _canonicalize_job_name(job_spec.get("job") if job_spec else None),
+        _extract_full_job_name_from_build_url(normalized_build_url),
+        _canonicalize_job_name(_nested_get(data, "subject", "content", "pipelineName")),
+        _canonicalize_job_name(custom_data.get("pipelineName")),
+        _canonicalize_job_name(custom_data.get("job_name"), repo_full_name=repo_full_name),
+        _canonicalize_job_name(custom_data.get("jobName"), repo_full_name=repo_full_name),
+        _canonicalize_job_name(custom_data.get("name"), repo_full_name=repo_full_name),
+        _canonicalize_job_name(custom_data.get("displayName"), repo_full_name=repo_full_name),
+        _canonicalize_job_name(_extract_job_name_from_build_url(normalized_build_url), repo_full_name=repo_full_name),
+    )
 
     target_branch = _first_non_empty_str(
         custom_data.get("target_branch"),
@@ -800,11 +806,46 @@ def _extract_job_name_from_build_url(normalized_build_url: str) -> str | None:
     return parts[-1]
 
 
+def _extract_full_job_name_from_build_url(normalized_build_url: str) -> str | None:
+    normalized_job_path = normalized_job_path_from_key(normalized_build_url)
+    if normalized_job_path is None:
+        return None
+    parts = _normalized_build_url_parts(normalized_job_path)
+    if len(parts) < 7:
+        return None
+    if not (
+        parts[0] == "jenkins"
+        and parts[1] == "job"
+        and parts[3] == "job"
+        and parts[5] == "job"
+    ):
+        return None
+    return f"{parts[2]}/{parts[4]}/{parts[6]}"
+
+
 def _extract_build_number_from_url(normalized_build_url: str) -> str | None:
     parts = _normalized_build_url_parts(normalized_build_url)
     if not parts:
         return None
     return parts[-1]
+
+
+def _canonicalize_job_name(value: Any, *, repo_full_name: str | None = None) -> str | None:
+    normalized = _first_non_empty_str(value)
+    if normalized is None:
+        return None
+
+    if "»" in normalized:
+        parts = [part.strip() for part in normalized.split("»") if part.strip()]
+        if len(parts) >= 3:
+            return "/".join(parts)
+
+    normalized = normalized.strip("/")
+    if "/" in normalized:
+        return normalized
+    if repo_full_name and " " not in normalized:
+        return f"{repo_full_name}/{normalized}"
+    return normalized
 
 
 def _normalized_build_url_parts(normalized_build_url: str) -> list[str]:

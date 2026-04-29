@@ -146,6 +146,11 @@ def _create_test_schema(engine: Engine) -> None:
           state TEXT NULL,
           created_at TEXT NULL,
           updated_at TEXT NULL,
+          closed_at TEXT NULL,
+          merged INTEGER NULL,
+          merged_at TEXT NULL,
+          review TEXT NULL,
+          review_comments TEXT NULL,
           timeline TEXT NULL,
           branches TEXT NULL
         )
@@ -187,6 +192,25 @@ def _create_test_schema(engine: Engine) -> None:
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           UNIQUE(repo, issue_number)
+        )
+        """,
+        """
+        CREATE TABLE ci_l1_flaky_issue_pr_links (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          issue_repo TEXT NOT NULL,
+          issue_number INTEGER NOT NULL,
+          pr_repo TEXT NOT NULL,
+          pr_number INTEGER NOT NULL,
+          pr_url TEXT NOT NULL,
+          pr_title TEXT NOT NULL,
+          link_type TEXT NOT NULL,
+          source_event_type TEXT NOT NULL,
+          source_event_id INTEGER NULL,
+          linked_at TEXT NOT NULL,
+          source_ticket_updated_at TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(issue_repo, issue_number, pr_repo, pr_number)
         )
         """,
         """

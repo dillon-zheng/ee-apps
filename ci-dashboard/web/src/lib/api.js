@@ -63,6 +63,13 @@ export function toDateInputValue(value) {
 export function buildQuery(params) {
   const search = new URLSearchParams();
   Object.entries(params || {}).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      if (!value.length) {
+        return;
+      }
+      search.set(key, value.join(","));
+      return;
+    }
     if (value === undefined || value === null || value === "") {
       return;
     }

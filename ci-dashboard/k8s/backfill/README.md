@@ -50,7 +50,7 @@ cd /Users/dillon/workspace/ee-apps-worktrees/ci-dashboard-v1/ci-dashboard
 ./scripts/render_backfill_job.sh \
   --start-date 2025-12-01 \
   --image ghcr.io/pingcap-qe/ee-apps/ci-dashboard-jobs:<tag> \
-  --db-secret ci-dashboard-backfill-db \
+  --db-secret ci-dashboard-eq-prd-insight-db \
   --ca-secret ci-dashboard-backfill-ca \
   > /tmp/ci-dashboard-backfill.yaml
 
@@ -66,7 +66,7 @@ If you want to backfill a closed date range instead of open-ended import:
   --start-date 2025-12-01 \
   --end-date 2025-12-31 \
   --image ghcr.io/pingcap-qe/ee-apps/ci-dashboard-jobs:<tag> \
-  --db-secret ci-dashboard-backfill-db \
+  --db-secret ci-dashboard-eq-prd-insight-db \
   > /tmp/ci-dashboard-backfill.yaml
 ```
 

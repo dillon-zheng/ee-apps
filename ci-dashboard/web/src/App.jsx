@@ -4,6 +4,7 @@ import { Route, Routes, useLocation } from "react-router-dom";
 import { DashboardLayout } from "./components/layout";
 import OverviewPage from "./pages/OverviewPage";
 import BuildTrendPage from "./pages/BuildTrendPage";
+import MigrateStatusPage from "./pages/MigrateStatusPage";
 import FlakyPage from "./pages/FlakyPage";
 import { buildScopeLabel, getDefaultDateRange, useApiData } from "./lib/api";
 
@@ -14,6 +15,8 @@ const BRANCH_OPTIONS = [
   { value: "release-8.5", label: "release-8.5" },
 ];
 const CI_STATUS_PATH = "/ci-status";
+const MIGRATE_STATUS_PATH = "/migrate-status";
+const WEEK_GRANULARITY_PATHS = new Set([CI_STATUS_PATH, MIGRATE_STATUS_PATH]);
 
 function buildDefaultFilters(defaultRange, pathname) {
   const baseFilters = {
@@ -22,7 +25,7 @@ function buildDefaultFilters(defaultRange, pathname) {
     job_name: "",
     cloud_phase: "",
     issue_status: "",
-    granularity: pathname === CI_STATUS_PATH ? "week" : "day",
+    granularity: WEEK_GRANULARITY_PATHS.has(pathname) ? "week" : "day",
     start_date: defaultRange.start_date,
     end_date: defaultRange.end_date,
   };
@@ -64,7 +67,7 @@ export default function App() {
   }, [location.pathname]);
 
   useEffect(() => {
-    if (location.pathname !== CI_STATUS_PATH) {
+    if (!WEEK_GRANULARITY_PATHS.has(location.pathname)) {
       return;
     }
 
@@ -80,7 +83,6 @@ export default function App() {
     });
   }, [location.pathname]);
 
-  const shouldLoadJobs = Boolean(filters.repo);
   const jobs = useApiData(
     "/api/v1/filters/jobs",
     {
@@ -89,7 +91,6 @@ export default function App() {
       start_date: filters.start_date,
       end_date: filters.end_date,
     },
-    shouldLoadJobs,
   );
   const cloudPhases = useApiData("/api/v1/filters/cloud-phases", {
     repo: filters.repo,
@@ -123,10 +124,6 @@ export default function App() {
     });
   }
 
-  function resetFilters() {
-    setFilters(buildDefaultFilters(defaultRange, location.pathname));
-  }
-
   const filterOptions = {
     repos: REPO_OPTIONS,
     branches: BRANCH_OPTIONS,
@@ -139,12 +136,12 @@ export default function App() {
     <DashboardLayout
       filters={filters}
       onFilterChange={handleFilterChange}
-      onResetFilters={resetFilters}
       filterOptions={filterOptions}
     >
       <Routes>
         <Route path="/" element={<OverviewPage filters={filters} />} />
         <Route path={CI_STATUS_PATH} element={<BuildTrendPage filters={filters} />} />
+        <Route path={MIGRATE_STATUS_PATH} element={<MigrateStatusPage filters={filters} />} />
         <Route path="/flaky" element={<FlakyPage filters={filters} />} />
       </Routes>
     </DashboardLayout>

@@ -12,6 +12,8 @@ from ci_dashboard.api.queries.base import (
     build_common_where,
 )
 
+JOB_FILTER_PREFIXES = ("pingcap", "tikv", "tidbcloud")
+
 
 def list_repos(
     engine: Engine,
@@ -94,6 +96,16 @@ def list_jobs(
         end_date=end_date,
     )
     where_clause, params = build_common_where(filters, table_alias="b")
+    job_prefix_clause = " OR ".join(
+        f"LOWER(b.job_name) LIKE :job_prefix_{index}"
+        for index in range(len(JOB_FILTER_PREFIXES))
+    )
+    params.update(
+        {
+            f"job_prefix_{index}": f"{prefix.lower()}%"
+            for index, prefix in enumerate(JOB_FILTER_PREFIXES)
+        }
+    )
 
     with engine.begin() as connection:
         builds_table = builds_table_expr(connection, filters, alias="b")
@@ -103,6 +115,7 @@ def list_jobs(
                 SELECT DISTINCT job_name
                 FROM {builds_table}
                 WHERE {where_clause}
+                  AND ({job_prefix_clause})
                 ORDER BY job_name
                 """
             ),

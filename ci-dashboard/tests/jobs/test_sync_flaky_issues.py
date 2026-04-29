@@ -12,7 +12,9 @@ from ci_dashboard.common.config import DatabaseSettings, JobSettings, Settings
 from ci_dashboard.jobs.state_store import get_job_state
 from ci_dashboard.jobs.sync_flaky_issues import (
     _build_flaky_issue_row,
+    _build_issue_pr_links_upsert_statement,
     _build_upsert_statement,
+    _extract_linked_pr_rows,
     _extract_issue_lifecycle,
     _fallback_issue_branch,
     _fetch_github_api_json,
@@ -26,6 +28,7 @@ from ci_dashboard.jobs.sync_flaky_issues import (
     fetch_issue_details_via_github_api,
     parse_issue_branch,
     parse_issue_branch_from_comments,
+    run_backfill_flaky_issue_pr_links,
     run_sync_flaky_issues,
 )
 
@@ -127,6 +130,7 @@ def test_sync_flaky_issues_end_to_end_and_idempotent_refresh(sqlite_engine, monk
 
     assert summary.source_rows_scanned == 1
     assert summary.rows_written == 1
+    assert summary.issue_pr_links_written == 0
     assert summary.branch_fetch_attempted == 0
     assert summary.branch_fetch_failed == 0
     assert summary.last_ticket_updated_at == "2026-04-13T12:00:00Z"
@@ -189,6 +193,7 @@ def test_sync_flaky_issues_end_to_end_and_idempotent_refresh(sqlite_engine, monk
     second_summary = run_sync_flaky_issues(sqlite_engine, _settings(batch_size=5))
     assert second_summary.source_rows_scanned == 1
     assert second_summary.rows_written == 1
+    assert second_summary.issue_pr_links_written == 0
     assert second_summary.last_ticket_updated_at == "2026-04-14T09:00:00Z"
 
     with sqlite_engine.begin() as connection:
@@ -261,6 +266,285 @@ def test_sync_flaky_issues_uses_github_api_comments_when_ticket_body_missing(
 
     assert row["issue_branch"] == "release-8.5"
     assert row["branch_source"] == "github_api_comments"
+
+
+def test_sync_flaky_issues_writes_and_replaces_issue_pr_links(
+    sqlite_engine,
+    monkeypatch,
+) -> None:
+    _insert_issue_ticket(
+        sqlite_engine,
+        ticket_id=10,
+        repo="pingcap/tidb",
+        number=67740,
+        title="Flaky test: TestUnregisterAfterPause in br/pkg/streamhelper",
+        body="Automated flaky test report.\n\n- Branch: master\n",
+        state="closed",
+        created_at="2026-04-14T00:05:37Z",
+        updated_at="2026-04-24T04:09:53Z",
+        timeline=[
+            {
+                "event": "cross-referenced",
+                "created_at": "2026-04-16T10:11:26Z",
+                "updated_at": "2026-04-16T10:11:26Z",
+                "source": {
+                    "type": "issue",
+                    "issue": {
+                        "number": 67822,
+                        "title": "br/pkg/streamhelper: stabilize flaky TestUnregisterAfterPause",
+                        "repository": {"full_name": "pingcap/tidb"},
+                        "pull_request": {"merged_at": "2026-04-23T08:05:40Z"},
+                    },
+                },
+            },
+            {"event": "closed", "created_at": "2026-04-23T08:05:41Z"},
+        ],
+    )
+
+    monkeypatch.setattr(
+        "ci_dashboard.jobs.sync_flaky_issues.fetch_issue_details_via_github_api",
+        lambda **_: (_ for _ in ()).throw(
+            AssertionError("GitHub API should not be called when source ticket has branch")
+        ),
+    )
+
+    summary = run_sync_flaky_issues(sqlite_engine, _settings(batch_size=10))
+
+    assert summary.rows_written == 1
+    assert summary.issue_pr_links_written == 1
+
+    with sqlite_engine.begin() as connection:
+        links = connection.execute(
+            text(
+                """
+                SELECT
+                  issue_repo,
+                  issue_number,
+                  pr_repo,
+                  pr_number,
+                  pr_url,
+                  pr_title,
+                  link_type,
+                  source_event_type,
+                  linked_at
+                FROM ci_l1_flaky_issue_pr_links
+                WHERE issue_repo = 'pingcap/tidb' AND issue_number = 67740
+                ORDER BY pr_number
+                """
+            )
+        ).mappings().all()
+
+    assert len(links) == 1
+    assert links[0]["pr_repo"] == "pingcap/tidb"
+    assert links[0]["pr_number"] == 67822
+    assert links[0]["pr_url"] == "https://github.com/pingcap/tidb/pull/67822"
+    assert links[0]["link_type"] == "linked_pull_request"
+    assert links[0]["source_event_type"] == "cross-referenced"
+    assert str(links[0]["linked_at"]).startswith("2026-04-16 10:11:26")
+
+    with sqlite_engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE github_tickets
+                SET updated_at = '2026-04-25T04:09:53Z',
+                    timeline = :timeline
+                WHERE repo = 'pingcap/tidb' AND number = 67740
+                """
+            ),
+            {
+                "timeline": json.dumps(
+                    [
+                        {
+                            "event": "cross-referenced",
+                            "created_at": "2026-04-24T09:00:00Z",
+                            "updated_at": "2026-04-24T09:00:00Z",
+                            "source": {
+                                "type": "issue",
+                                "issue": {
+                                    "number": 67871,
+                                    "title": "br/pkg/streamhelper: stabilize flaky TestUnregisterAfterPause v2",
+                                    "repository": {"full_name": "pingcap/tidb"},
+                                    "pull_request": {},
+                                },
+                            },
+                        }
+                    ]
+                )
+            },
+        )
+
+    second_summary = run_sync_flaky_issues(sqlite_engine, _settings(batch_size=10))
+    assert second_summary.issue_pr_links_written == 1
+
+    with sqlite_engine.begin() as connection:
+        links = connection.execute(
+            text(
+                """
+                SELECT pr_number
+                FROM ci_l1_flaky_issue_pr_links
+                WHERE issue_repo = 'pingcap/tidb' AND issue_number = 67740
+                ORDER BY pr_number
+                """
+            )
+        ).mappings().all()
+
+    assert [row["pr_number"] for row in links] == [67871]
+
+
+def test_backfill_flaky_issue_pr_links_rebuilds_links_without_touching_issue_rows(
+    sqlite_engine,
+) -> None:
+    _insert_issue_ticket(
+        sqlite_engine,
+        ticket_id=11,
+        repo="pingcap/tidb",
+        number=67563,
+        title="Flaky test: TestBatchCoprocessor in tidb",
+        body="Automated flaky test report.\n\n- Branch: release-8.5\n",
+        state="closed",
+        created_at="2026-04-10T00:00:00Z",
+        updated_at="2026-04-26T09:15:00Z",
+        timeline=[
+            {
+                "id": 3001,
+                "event": "cross-referenced",
+                "created_at": "2026-04-20T10:00:00Z",
+                "source": {
+                    "type": "issue",
+                    "issue": {
+                        "number": 67601,
+                        "title": "executor: stabilize flaky TestBatchCoprocessor",
+                        "repository": {"full_name": "pingcap/tidb"},
+                        "pull_request": {},
+                    },
+                },
+            },
+            {
+                "id": 3002,
+                "event": "cross-referenced",
+                "created_at": "2026-04-21T10:00:00Z",
+                "source": {
+                    "type": "issue",
+                    "issue": {
+                        "number": 67644,
+                        "title": "executor: stabilize flaky TestBatchCoprocessor follow-up",
+                        "repository": {"full_name": "pingcap/tidb"},
+                        "pull_request": {},
+                    },
+                },
+            },
+        ],
+    )
+
+    with sqlite_engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO ci_l1_flaky_issues (
+                  repo,
+                  issue_number,
+                  issue_url,
+                  issue_title,
+                  case_name,
+                  issue_status,
+                  issue_branch,
+                  branch_source,
+                  issue_created_at,
+                  issue_updated_at,
+                  issue_closed_at,
+                  last_reopened_at,
+                  reopen_count,
+                  source_ticket_id,
+                  source_ticket_updated_at,
+                  created_at,
+                  updated_at
+                ) VALUES (
+                  'pingcap/tidb',
+                  67563,
+                  'https://github.com/pingcap/tidb/issues/67563',
+                  'Flaky test: TestBatchCoprocessor in tidb',
+                  'TestBatchCoprocessor',
+                  'closed',
+                  'release-8.4',
+                  'manual_seed',
+                  '2026-04-10 00:00:00',
+                  '2026-04-26 09:15:00',
+                  NULL,
+                  NULL,
+                  0,
+                  11,
+                  '2026-04-26 09:15:00',
+                  CURRENT_TIMESTAMP,
+                  CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO ci_l1_flaky_issue_pr_links (
+                  issue_repo,
+                  issue_number,
+                  pr_repo,
+                  pr_number,
+                  pr_url,
+                  pr_title,
+                  link_type,
+                  source_event_type,
+                  source_event_id,
+                  linked_at,
+                  source_ticket_updated_at
+                ) VALUES (
+                  'pingcap/tidb',
+                  67563,
+                  'pingcap/tidb',
+                  67599,
+                  'https://github.com/pingcap/tidb/pull/67599',
+                  'stale link',
+                  'linked_pull_request',
+                  'cross-referenced',
+                  2999,
+                  '2026-04-19 10:00:00',
+                  '2026-04-25 09:15:00'
+                )
+                """
+            )
+        )
+
+    summary = run_backfill_flaky_issue_pr_links(sqlite_engine, _settings(batch_size=1))
+
+    assert summary.batches_processed == 1
+    assert summary.source_rows_scanned == 1
+    assert summary.issue_rows_touched == 1
+    assert summary.issue_pr_links_written == 2
+    assert summary.last_ticket_updated_at == "2026-04-26T09:15:00Z"
+
+    with sqlite_engine.begin() as connection:
+        issue_row = connection.execute(
+            text(
+                """
+                SELECT issue_branch, branch_source
+                FROM ci_l1_flaky_issues
+                WHERE repo = 'pingcap/tidb' AND issue_number = 67563
+                """
+            )
+        ).mappings().one()
+        links = connection.execute(
+            text(
+                """
+                SELECT pr_number
+                FROM ci_l1_flaky_issue_pr_links
+                WHERE issue_repo = 'pingcap/tidb' AND issue_number = 67563
+                ORDER BY pr_number
+                """
+            )
+        ).mappings().all()
+
+    assert issue_row["issue_branch"] == "release-8.4"
+    assert issue_row["branch_source"] == "manual_seed"
+    assert [row["pr_number"] for row in links] == [67601, 67644]
 
 
 def test_sync_flaky_issues_reuses_existing_branch_when_ticket_is_unchanged(
@@ -420,6 +704,72 @@ def test_sync_flaky_issue_helpers_cover_fallbacks_and_payload_shapes(monkeypatch
     assert row.issue_branch == "master"
     assert row.branch_source == "ticket_body"
 
+    link_rows = _extract_linked_pr_rows(
+        {
+            "repo": "pingcap/tidb",
+            "number": 70002,
+            "timeline": [
+                {
+                    "event": "cross-referenced",
+                    "created_at": "2026-04-16T10:11:26Z",
+                    "source": {
+                        "type": "issue",
+                        "issue": {
+                            "number": 67822,
+                            "title": "stabilize flaky TestBranchFallback",
+                            "repository": {"full_name": "pingcap/tidb"},
+                            "pull_request": {"merged_at": "2026-04-23T08:05:40Z"},
+                        },
+                    },
+                },
+                {
+                    "event": "cross-referenced",
+                    "created_at": "2026-04-17T10:11:26Z",
+                    "source": {
+                        "type": "issue",
+                        "issue": {
+                            "number": 67822,
+                            "title": "stabilize flaky TestBranchFallback",
+                            "repository": {"full_name": "pingcap/tidb"},
+                            "pull_request": {"merged_at": "2026-04-23T08:05:40Z"},
+                        },
+                    },
+                },
+                {
+                    "event": "cross-referenced",
+                    "created_at": "2026-04-18T10:11:26Z",
+                    "source": {
+                        "type": "issue",
+                        "issue": {
+                            "number": 67871,
+                            "title": "stabilize flaky TestBranchFallback again",
+                            "repository": {"full_name": "pingcap/tidb"},
+                            "pull_request": {},
+                        },
+                    },
+                },
+                {
+                    "event": "cross-referenced",
+                    "created_at": "2026-04-19T10:11:26Z",
+                    "source": {
+                        "type": "issue",
+                        "issue": {
+                            "number": 70009,
+                            "title": "plain issue, not PR",
+                            "repository": {"full_name": "pingcap/tidb"},
+                        },
+                    },
+                },
+            ],
+        },
+        source_ticket_updated_at=datetime.fromisoformat("2026-04-15T09:00:00+00:00"),
+    )
+    assert [(item.pr_repo, item.pr_number) for item in link_rows] == [
+        ("pingcap/tidb", 67822),
+        ("pingcap/tidb", 67871),
+    ]
+    assert str(link_rows[0].linked_at).startswith("2026-04-16 10:11:26")
+
     existing = {
         "issue_branch": "release-8.5",
         "branch_source": "github_api_body",
@@ -510,3 +860,5 @@ def test_upsert_flaky_issues_accepts_empty_rows_and_tidb_statement(sqlite_engine
     tidb_connection = SimpleNamespace(dialect=SimpleNamespace(name="mysql"))
     statement = _build_upsert_statement(tidb_connection)
     assert "ON DUPLICATE KEY UPDATE" in str(statement)
+    issue_pr_links_statement = _build_issue_pr_links_upsert_statement(tidb_connection)
+    assert "ON DUPLICATE KEY UPDATE" in str(issue_pr_links_statement)

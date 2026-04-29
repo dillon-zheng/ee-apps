@@ -2,7 +2,7 @@
 set -euo pipefail
 
 namespace="apps"
-db_secret="ci-dashboard-backfill-db"
+db_secret="ci-dashboard-eq-prd-insight-db"
 ca_secret="ci-dashboard-backfill-ca"
 ca_key="ca.crt"
 
@@ -21,7 +21,7 @@ Usage:
 
 Options:
   --namespace NAME      Kubernetes namespace. Default: apps
-  --db-secret NAME      Secret containing TIDB_* or CI_DASHBOARD_DB_URL. Default: ci-dashboard-backfill-db
+  --db-secret NAME      Secret containing TIDB_* or CI_DASHBOARD_DB_URL. Default: ci-dashboard-eq-prd-insight-db
   --ca-secret NAME      Secret containing TiDB CA file. Default: ci-dashboard-backfill-ca
   --ca-key NAME         Key inside the CA secret. Default: ca.crt
   --out-dir PATH        Output directory. Default: ci-dashboard/.local
@@ -115,8 +115,13 @@ else
   write_env_line "TIDB_DB" "$(printf '%s' "${database_raw}" | decode_base64)"
 fi
 
+decoded_ssl_ca=""
 if [[ -n "${ssl_ca_raw}" ]]; then
-  write_env_line "TIDB_SSL_CA" "$(printf '%s' "${ssl_ca_raw}" | decode_base64)"
+  decoded_ssl_ca="$(printf '%s' "${ssl_ca_raw}" | decode_base64)"
+fi
+
+if [[ -n "${decoded_ssl_ca}" && -f "${decoded_ssl_ca}" ]]; then
+  write_env_line "TIDB_SSL_CA" "${decoded_ssl_ca}"
 elif [[ -n "${ca_secret}" ]]; then
   ca_raw=$(read_secret_value "${ca_secret}" "${ca_key//./\\.}")
   if [[ -z "${ca_raw}" ]]; then
@@ -130,6 +135,8 @@ import sys
 sys.stdout.buffer.write(base64.b64decode(sys.stdin.read().strip()))
 ' > "${ca_path}"
   write_env_line "TIDB_SSL_CA" "${ca_path}"
+elif [[ -n "${decoded_ssl_ca}" ]]; then
+  write_env_line "TIDB_SSL_CA" "${decoded_ssl_ca}"
 fi
 
 echo "wrote ${env_file}"

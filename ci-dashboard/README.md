@@ -98,8 +98,8 @@ make web-dev
 Notes:
 
 - `make prepare-local-tidb-env` reads the current Kubernetes secrets:
-  - `apps/ci-dashboard-backfill-db`
-  - `apps/ci-dashboard-backfill-ca`
+  - `apps/ci-dashboard-eq-prd-insight-db`
+  - `apps/ci-dashboard-backfill-ca` as CA fallback when the DB secret exposes a container-only `TIDB_SSL_CA` path
 - it writes local-only files under `ci-dashboard/.local/`
 - Vite proxies `/api/*` to `http://127.0.0.1:8000`, so the browser still talks only to the local dev server
 - you can verify the chain with:

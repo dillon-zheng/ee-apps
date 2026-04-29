@@ -129,7 +129,7 @@ def test_parse_jenkins_finished_event_extracts_canonical_fields() -> None:
     assert parsed.build_url == "https://prow.tidb.net/jenkins/job/pingcap/job/tidb/job/ghpr_unit_test/301/"
     assert parsed.state == "failure"
     assert parsed.jenkins_result == "FAILURE"
-    assert parsed.job_name == "ghpr_unit_test"
+    assert parsed.job_name == "pingcap/tidb/ghpr_unit_test"
     assert parsed.repo_full_name == "pingcap/tidb"
     assert parsed.pr_number == 301
     assert parsed.is_pr_build is True
@@ -147,7 +147,7 @@ def test_parse_jenkins_finished_event_supports_real_plugin_payload() -> None:
     assert parsed.source_prow_job_id == "3bfe389c-e361-4a6d-a1d6-679fb87b0e13"
     assert parsed.jenkins_result == "SUCCESS"
     assert parsed.state == "success"
-    assert parsed.job_name == "pull_mysql_client_test"
+    assert parsed.job_name == "pingcap/tidb/pull_mysql_client_test"
     assert parsed.job_type == "presubmit"
     assert parsed.org == "pingcap"
     assert parsed.repo == "tidb"
@@ -175,7 +175,7 @@ def test_process_jenkins_event_message_inserts_build_and_audit(sqlite_engine) ->
         build = connection.execute(
             text(
                 """
-                SELECT source_prow_job_id, state, normalized_build_url, repo_full_name, pr_number, is_pr_build
+                SELECT source_prow_job_id, state, job_name, normalized_build_url, repo_full_name, pr_number, is_pr_build
                 FROM ci_l1_builds
                 """
             )
@@ -191,6 +191,7 @@ def test_process_jenkins_event_message_inserts_build_and_audit(sqlite_engine) ->
 
     assert build["source_prow_job_id"] is None
     assert build["state"] == "failure"
+    assert build["job_name"] == "pingcap/tidb/ghpr_unit_test"
     assert build["normalized_build_url"] == "https://prow.tidb.net/jenkins/job/pingcap/job/tidb/job/ghpr_unit_test/301/"
     assert build["repo_full_name"] == "pingcap/tidb"
     assert build["pr_number"] == 301
@@ -211,7 +212,7 @@ def test_process_jenkins_event_message_inserts_real_plugin_payload(sqlite_engine
         build = connection.execute(
             text(
                 """
-                SELECT source_prow_job_id, state, url, normalized_build_url, job_type, repo_full_name, pr_number, author, head_sha, build_system, cloud_phase
+                SELECT source_prow_job_id, state, job_name, url, normalized_build_url, job_type, repo_full_name, pr_number, author, head_sha, build_system, cloud_phase
                 FROM ci_l1_builds
                 """
             )
@@ -227,6 +228,7 @@ def test_process_jenkins_event_message_inserts_real_plugin_payload(sqlite_engine
 
     assert build["source_prow_job_id"] == "3bfe389c-e361-4a6d-a1d6-679fb87b0e13"
     assert build["state"] == "success"
+    assert build["job_name"] == "pingcap/tidb/pull_mysql_client_test"
     assert build["url"] == "https://prow.tidb.net/jenkins/job/pingcap/job/tidb/job/pull_mysql_client_test/1816/"
     assert build["normalized_build_url"] == "https://prow.tidb.net/jenkins/job/pingcap/job/tidb/job/pull_mysql_client_test/1816/"
     assert build["job_type"] == "presubmit"
@@ -286,7 +288,7 @@ def test_process_jenkins_event_message_enriches_existing_prow_row_without_cleari
     assert row["source_prow_row_id"] == 301
     assert row["source_prow_job_id"] == "prow-job-301"
     assert row["namespace"] == "prow"
-    assert row["job_name"] == "ghpr_unit_test"
+    assert row["job_name"] == "pingcap/tidb/ghpr_unit_test"
     assert row["job_type"] == "presubmit"
     assert row["repo_full_name"] == "pingcap/tidb"
     assert row["state"] == "failure"

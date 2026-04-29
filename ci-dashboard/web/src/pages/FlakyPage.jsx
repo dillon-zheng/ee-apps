@@ -18,6 +18,49 @@ import {
   TrendChart,
 } from "../components/charts";
 
+function formatCountDelta(value) {
+  const numeric = Number(value || 0);
+  if (numeric === 0) {
+    return "0 vs last week";
+  }
+  return `${numeric > 0 ? "+" : ""}${formatNumber(numeric)} vs last week`;
+}
+
+function buildSnapshotSubtitle(meta) {
+  const asOfDate = meta?.as_of_date;
+  const comparisonDate = meta?.comparison_as_of_date;
+  if (!asOfDate || !comparisonDate) {
+    return "Repo + branch snapshot";
+  }
+  return `As of ${asOfDate}, compared with ${comparisonDate}.`;
+}
+
+function SnapshotProgressCard({ title, subtitle, tone = "default", items, loading, error }) {
+  return (
+    <article className={`progress-card progress-card--${tone}`}>
+      <header className="progress-card__header">
+        <span className="progress-card__title">{title}</span>
+        <span className="progress-card__subtitle">{subtitle}</span>
+      </header>
+      {loading ? <div className="progress-card__state">Loading snapshot...</div> : null}
+      {!loading && error ? <div className="progress-card__state progress-card__state--error">Could not load snapshot.</div> : null}
+      {!loading && !error ? (
+        <div className="progress-card__rows">
+          {items.map((item) => (
+            <div key={item.label} className="progress-card__row">
+              <div className="progress-card__row-head">
+                <span className="progress-card__metric-label">{item.label}</span>
+                <span className="progress-card__metric-delta">{item.delta}</span>
+              </div>
+              <strong className="progress-card__metric-value">{item.value}</strong>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
 export default function FlakyPage({ filters }) {
   const page = useApiData("/api/v1/pages/flaky", filters);
   const weeklyFlakyTrend = useApiData("/api/v1/flaky/composition", {
@@ -36,7 +79,6 @@ export default function FlakyPage({ filters }) {
   const distinctRows = page.data?.distinct_flaky_case_counts?.rows || [];
   const issueWeeks = page.data?.issue_case_weekly_rates?.weeks || [];
   const issueRows = page.data?.issue_case_weekly_rates?.rows || [];
-  const issueLifecycle = page.data?.issue_lifecycle || {};
   const latestDistinctTotal = distinctRows.reduce(
     (sum, row) => sum + Number(row.values?.[row.values.length - 1] || 0),
     0,
@@ -52,8 +94,8 @@ export default function FlakyPage({ filters }) {
   const latestIssueWeekLabel = issueWeeks[issueWeeks.length - 1] || "latest bucket";
   const failureLikeBuildCount = Number(currentPeriod?.failure_like_build_count || 0);
   const totalPrCount = Number(currentPeriod?.total_pr_count || 0);
-  const latestFullWeekLabel = issueLifecycle?.meta?.latest_full_week_start || "latest full week";
-  const latestFullWeekDisplay = `${latestFullWeekLabel} week`;
+  const issueFixProgress = page.data?.issue_fix_progress || {};
+  const snapshotSubtitle = buildSnapshotSubtitle(issueFixProgress.meta);
 
   return (
     <div className="page-stack">
@@ -62,118 +104,6 @@ export default function FlakyPage({ filters }) {
         title="Separate noisy instability from the failures we still cannot classify cleanly"
         description="This page follows the same intent as the pilot logic, but makes the signals explorable by repo, branch, job, and cloud."
       />
-
-      <Panel
-        title="Distinct flaky case number"
-        subtitle="Weekly distinct flaky testcase count derived from problem_case_runs, aligned by PR target branch."
-        loading={page.loading}
-        error={page.error}
-        actions={showPanelActions ? (
-          <div className="panel-badge-row">
-            <span className="panel-badge">
-              <strong>{formatNumber(distinctRows.length)}</strong>
-              <span>branches</span>
-            </span>
-            <span className="panel-badge">
-              <strong>{formatNumber(latestDistinctTotal)}</strong>
-              <span>{latestIssueWeekLabel}</span>
-            </span>
-          </div>
-        ) : null}
-      >
-        <DistinctCaseCountTable
-          weeks={page.data?.distinct_flaky_case_counts?.weeks}
-          rows={page.data?.distinct_flaky_case_counts?.rows}
-          scrollClassName="table-scroll--compact-y"
-        />
-      </Panel>
-
-      <Panel
-        title="Issue lifecycle by week"
-        subtitle="Weekly created, closed, and reopened issue counts in the current repo and branch scope."
-        loading={page.loading}
-        error={page.error}
-      >
-        <TrendChart
-          series={page.data?.issue_lifecycle_weekly?.series}
-          yFormatter={formatNumber}
-          height={220}
-        />
-      </Panel>
-
-      <Panel
-        title="Filtered-issue flaky rate"
-        subtitle="Weekly flaky rate for the testcase set currently tracked by flaky GitHub issues in this scope."
-        loading={page.loading}
-        error={page.error}
-        actions={showPanelActions ? (
-          <div className="panel-badge-row">
-            <span className="panel-badge">
-              <strong>{formatNumber(issueRows.length)}</strong>
-              <span>tracked cases</span>
-            </span>
-            <span className="panel-badge">
-              <strong>{formatNumber(openIssueCount)}</strong>
-              <span>open issues</span>
-            </span>
-            <span className="panel-badge">
-              <strong>{formatNumber(reopenedIssueCount)}</strong>
-              <span>reopened</span>
-            </span>
-          </div>
-        ) : null}
-      >
-        <TrendChart
-          series={page.data?.issue_filtered_weekly_trend?.series}
-          yFormatter={formatPercent}
-          height={188}
-        />
-      </Panel>
-
-      <Panel
-        title="Filtered-issue weekly case table"
-        subtitle="Each row keeps the issue link and shows weekly rate as rate (flaky runs / estimated runs)."
-        loading={page.loading}
-        error={page.error}
-        actions={showPanelActions ? (
-          <div className="panel-badge-row">
-            <span className="panel-badge">
-              <strong>{formatNumber(issueRows.length)}</strong>
-              <span>issue cases</span>
-            </span>
-            <span className="panel-badge">
-              <strong>{formatNumber(noFlakyPastTwoWeeksCases)}</strong>
-              <span>cases no flaky in past 2 weeks</span>
-            </span>
-          </div>
-        ) : null}
-      >
-        <IssueWeeklyRateTable
-          weeks={page.data?.issue_case_weekly_rates?.weeks}
-          rows={page.data?.issue_case_weekly_rates?.rows}
-          scrollClassName="table-scroll--tall"
-        />
-      </Panel>
-
-      <div className="scope-note">
-        <span className="scope-note__eyebrow">Scope switch</span>
-        <div className="scope-note__grid">
-          <div className="scope-note__block">
-            <strong>Above: issue-filtered, case-level panels</strong>
-            <span>
-              The two issue panels use the tracked GitHub issue set in the current repo, branch,
-              time range, and issue status.
-            </span>
-          </div>
-          <div className="scope-note__block">
-            <strong>Below: job-level, build-based panels</strong>
-            <span>
-              Summary cards and charts below ignore issue status. They use repo, branch, job,
-              cloud, and time only.
-            </span>
-          </div>
-        </div>
-      </div>
 
       <section className="stats-grid">
         <StatCard
@@ -229,45 +159,196 @@ export default function FlakyPage({ filters }) {
               : null
           }
         />
-        <StatCard
-          label={`Issues created (${latestFullWeekDisplay})`}
-          value={formatNumber(issueLifecycle.latest_week_created_count || 0)}
-          detail={`${formatNumber(issueLifecycle.scoped_open_count || 0)} open now (current status)`}
-          tone="rose"
+      </section>
+
+      <Panel
+        title="Distinct flaky case number"
+        subtitle="Weekly distinct flaky testcase count derived from problem_case_runs, aligned by PR target branch."
+        loading={page.loading}
+        error={page.error}
+        actions={showPanelActions ? (
+          <div className="panel-badge-row">
+            <span className="panel-badge">
+              <strong>{formatNumber(distinctRows.length)}</strong>
+              <span>branches</span>
+            </span>
+            <span className="panel-badge">
+              <strong>{formatNumber(latestDistinctTotal)}</strong>
+              <span>{latestIssueWeekLabel}</span>
+            </span>
+          </div>
+        ) : null}
+      >
+        <DistinctCaseCountTable
+          weeks={page.data?.distinct_flaky_case_counts?.weeks}
+          rows={page.data?.distinct_flaky_case_counts?.rows}
+          scrollClassName="table-scroll--compact-y"
         />
-        <StatCard
-          label={`Issues closed (${latestFullWeekDisplay})`}
-          value={formatNumber(issueLifecycle.latest_week_closed_count || 0)}
-          detail={`${formatNumber(issueLifecycle.latest_week_reopened_count || 0)} reopened this week`}
+      </Panel>
+
+      <section className="progress-summary-grid">
+        <SnapshotProgressCard
+          title="Flaky issue progress"
+          subtitle={snapshotSubtitle}
+          tone="rose"
+          loading={page.loading}
+          error={page.error}
+          items={[
+            {
+              label: "Filed",
+              value: formatNumber(issueFixProgress.filed_issue_count || 0),
+              delta: formatCountDelta(issueFixProgress.filed_issue_delta || 0),
+            },
+            {
+              label: "Fixed",
+              value: formatNumber(issueFixProgress.fixed_issue_count || 0),
+              delta: formatCountDelta(issueFixProgress.fixed_issue_delta || 0),
+            },
+          ]}
+        />
+        <SnapshotProgressCard
+          title="Fix PR progress"
+          subtitle={snapshotSubtitle}
           tone="teal"
+          loading={page.loading}
+          error={page.error}
+          items={[
+            {
+              label: "In review",
+              value: formatNumber(issueFixProgress.in_review_pr_count || 0),
+              delta: formatCountDelta(issueFixProgress.in_review_pr_delta || 0),
+            },
+            {
+              label: "Merged",
+              value: formatNumber(issueFixProgress.merged_pr_count || 0),
+              delta: formatCountDelta(issueFixProgress.merged_pr_delta || 0),
+            },
+          ]}
         />
       </section>
 
-      <div className="page-grid page-grid--two-column">
-        <Panel
-          title="Flaky rate trend"
-          subtitle="Flaky, blind-retry-loop, and noisy rates together, each using failure-like builds as the denominator."
-          loading={weeklyFlakyTrend.loading}
-          error={weeklyFlakyTrend.error}
-        >
+      <Panel
+        title="Issue lifecycle by week"
+        subtitle="Weekly created, closed, reopened, and week-end open issue counts in the current repo and branch scope."
+        loading={page.loading}
+        error={page.error}
+      >
         <TrendChart
-          series={weeklyFlakyTrend.data?.series}
-          rightYFormatter={formatPercent}
-          compactY
+          series={page.data?.issue_lifecycle_weekly?.series}
+          yFormatter={formatNumber}
+          rightYFormatter={formatNumber}
+          height={220}
         />
       </Panel>
+
+      <Panel
+        title="Filtered-issue weekly case table"
+        subtitle="Each row keeps the issue link and shows weekly rate as rate (flaky runs / estimated runs)."
+        loading={page.loading}
+        error={page.error}
+        actions={showPanelActions ? (
+          <div className="panel-badge-row">
+            <span className="panel-badge">
+              <strong>{formatNumber(issueRows.length)}</strong>
+              <span>issue cases</span>
+            </span>
+            <span className="panel-badge">
+              <strong>{formatNumber(noFlakyPastTwoWeeksCases)}</strong>
+              <span>cases no flaky in past 2 weeks</span>
+            </span>
+          </div>
+        ) : null}
+      >
+        <IssueWeeklyRateTable
+          weeks={page.data?.issue_case_weekly_rates?.weeks}
+          rows={page.data?.issue_case_weekly_rates?.rows}
+          scrollClassName="table-scroll--tall"
+        />
+      </Panel>
+
+      <div className="scope-note">
+        <span className="scope-note__eyebrow">Scope switch</span>
+        <div className="scope-note__grid">
+          <div className="scope-note__block">
+            <strong>Issue-tracked panels</strong>
+            <span>
+              The progress cards, lifecycle chart, and filtered case table use tracked flaky
+              issues and linked fix PRs. The snapshot cards are repo and branch scoped, as of
+              the selected end date.
+            </span>
+          </div>
+          <div className="scope-note__block">
+            <strong>Build-scope panels</strong>
+            <span>
+              The four rate cards and the remaining noisy and failure charts ignore issue status
+              and follow the build-side repo, branch, job, cloud, and time filters.
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div className="flaky-highlight-row">
+        <div className="flaky-highlight-stack">
+          <Panel
+            title="Flaky rate trend"
+            subtitle="Flaky, blind-retry-loop, and noisy rates together, each using failure-like builds as the denominator."
+            loading={weeklyFlakyTrend.loading}
+            error={weeklyFlakyTrend.error}
+          >
+            <TrendChart
+              series={weeklyFlakyTrend.data?.series}
+              rightYFormatter={formatPercent}
+              compactY
+              height={208}
+            />
+          </Panel>
+
+          <Panel
+            title="Filtered-issue flaky rate"
+            subtitle="Weekly flaky rate for the testcase set currently tracked by flaky GitHub issues in this scope."
+            loading={page.loading}
+            error={page.error}
+            actions={showPanelActions ? (
+              <div className="panel-badge-row">
+                <span className="panel-badge">
+                  <strong>{formatNumber(issueRows.length)}</strong>
+                  <span>tracked cases</span>
+                </span>
+                <span className="panel-badge">
+                  <strong>{formatNumber(openIssueCount)}</strong>
+                  <span>open issues</span>
+                </span>
+                <span className="panel-badge">
+                  <strong>{formatNumber(reopenedIssueCount)}</strong>
+                  <span>reopened</span>
+                </span>
+              </div>
+            ) : null}
+          >
+            <TrendChart
+              series={page.data?.issue_filtered_weekly_trend?.series}
+              yFormatter={formatPercent}
+              compactY
+              height={188}
+            />
+          </Panel>
+        </div>
 
         <Panel
           title="Top noisy jobs"
           subtitle="Jobs ranked by noisy rate, with raw noisy and failure-like build counts kept visible for context."
           loading={page.loading}
           error={page.error}
+          className="panel--full-height"
         >
           <RankingList
             items={page.data?.top_jobs?.items}
             valueFormatter={formatPercent}
           />
         </Panel>
+      </div>
+
+      <div className="page-grid page-grid--two-column">
 
         <Panel
           title="Failure category share (draft)"

@@ -3,7 +3,7 @@ set -euo pipefail
 
 namespace="apps"
 image="ghcr.io/pingcap-qe/ee-apps/ci-dashboard-jobs:latest"
-db_secret="ci-dashboard-backfill-db"
+db_secret="ci-dashboard-eq-prd-insight-db"
 start_date=""
 end_date=""
 job_command="backfill-range"
@@ -38,7 +38,7 @@ Optional:
   --end-date DATE           Inclusive end date for backfill-range.
   --namespace NAME          Kubernetes namespace. Default: apps
   --image IMAGE             Jobs image. Default: ghcr.io/pingcap-qe/ee-apps/ci-dashboard-jobs:latest
-  --db-secret NAME          Secret containing TIDB_* or CI_DASHBOARD_DB_URL. Default: ci-dashboard-backfill-db
+  --db-secret NAME          Secret containing TIDB_* or CI_DASHBOARD_DB_URL. Default: ci-dashboard-eq-prd-insight-db
   --job-name NAME           Fixed Job name. Default: ci-dashboard-backfill-<timestamp>
   --batch-size N            CI_DASHBOARD_BATCH_SIZE override. Default: 2000
   --refresh-group-batch-size N

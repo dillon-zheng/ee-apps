@@ -15,7 +15,10 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
 from ci_dashboard.common.config import Settings
-from ci_dashboard.common.models import SyncFlakyIssuesSummary
+from ci_dashboard.common.models import (
+    BackfillFlakyIssuePrLinksSummary,
+    SyncFlakyIssuesSummary,
+)
 from ci_dashboard.common.sql_helpers import chunked
 from ci_dashboard.jobs.state_store import (
     get_job_state,
@@ -54,6 +57,21 @@ class FlakyIssueRow:
     source_ticket_updated_at: datetime
 
 
+@dataclass(frozen=True)
+class FlakyIssuePrLinkRow:
+    issue_repo: str
+    issue_number: int
+    pr_repo: str
+    pr_number: int
+    pr_url: str
+    pr_title: str
+    link_type: str
+    source_event_type: str
+    source_event_id: int | None
+    linked_at: datetime
+    source_ticket_updated_at: datetime
+
+
 def run_sync_flaky_issues(engine: Engine, settings: Settings) -> SyncFlakyIssuesSummary:
     with engine.begin() as connection:
         watermark = _load_watermark(connection)
@@ -68,7 +86,7 @@ def run_sync_flaky_issues(engine: Engine, settings: Settings) -> SyncFlakyIssues
 
         summary.source_rows_scanned = len(source_rows)
 
-        prepared_rows: list[FlakyIssueRow] = []
+        prepared_batches: list[tuple[FlakyIssueRow, list[FlakyIssuePrLinkRow]]] = []
         latest_updated_at: datetime | None = None
 
         for row in source_rows:
@@ -83,18 +101,31 @@ def run_sync_flaky_issues(engine: Engine, settings: Settings) -> SyncFlakyIssues
             if gh_failed:
                 summary.branch_fetch_failed += 1
 
-            prepared_rows.append(
-                _build_flaky_issue_row(
-                    row,
-                    issue_branch=issue_branch,
-                    branch_source=branch_source,
-                )
+            issue_row = _build_flaky_issue_row(
+                row,
+                issue_branch=issue_branch,
+                branch_source=branch_source,
             )
+            link_rows = _extract_linked_pr_rows(
+                row,
+                source_ticket_updated_at=issue_row.source_ticket_updated_at,
+            )
+            prepared_batches.append((issue_row, link_rows))
 
-        for batch in chunked(prepared_rows, settings.jobs.batch_size):
+        for batch in chunked(prepared_batches, settings.jobs.batch_size):
             with engine.begin() as connection:
-                _upsert_flaky_issues(connection, batch)
-                summary.rows_written += len(batch)
+                issue_rows = [item[0] for item in batch]
+                link_rows = [link_row for _issue_row, links in batch for link_row in links]
+                issue_keys = [(issue_row.repo, issue_row.issue_number) for issue_row in issue_rows]
+
+                _upsert_flaky_issues(connection, issue_rows)
+                _replace_flaky_issue_pr_links(
+                    connection,
+                    issue_keys=issue_keys,
+                    rows=link_rows,
+                )
+                summary.rows_written += len(issue_rows)
+                summary.issue_pr_links_written += len(link_rows)
 
         new_watermark = {
             "last_ticket_updated_at": latest_updated_at.isoformat().replace("+00:00", "Z")
@@ -110,6 +141,54 @@ def run_sync_flaky_issues(engine: Engine, settings: Settings) -> SyncFlakyIssues
         with engine.begin() as connection:
             mark_job_failed(connection, JOB_NAME, watermark, str(exc))
         raise
+
+
+def run_backfill_flaky_issue_pr_links(
+    engine: Engine,
+    settings: Settings,
+) -> BackfillFlakyIssuePrLinksSummary:
+    summary = BackfillFlakyIssuePrLinksSummary()
+
+    with engine.begin() as connection:
+        source_rows = _fetch_source_issue_rows(connection, DEFAULT_FLAKY_ISSUE_REPOS)
+
+    summary.source_rows_scanned = len(source_rows)
+    latest_updated_at: datetime | None = None
+
+    for batch in chunked(source_rows, settings.jobs.batch_size):
+        issue_keys: list[tuple[str, int]] = []
+        link_rows: list[FlakyIssuePrLinkRow] = []
+
+        for row in batch:
+            source_updated_at = _parse_datetime(row["updated_at"])
+            if latest_updated_at is None or source_updated_at > latest_updated_at:
+                latest_updated_at = source_updated_at
+
+            issue_keys.append((str(row["repo"]), int(row["number"])))
+            link_rows.extend(
+                _extract_linked_pr_rows(
+                    row,
+                    source_ticket_updated_at=source_updated_at,
+                )
+            )
+
+        with engine.begin() as connection:
+            _replace_flaky_issue_pr_links(
+                connection,
+                issue_keys=issue_keys,
+                rows=link_rows,
+            )
+
+        summary.batches_processed += 1
+        summary.issue_rows_touched += len(issue_keys)
+        summary.issue_pr_links_written += len(link_rows)
+
+    summary.last_ticket_updated_at = (
+        latest_updated_at.isoformat().replace("+00:00", "Z")
+        if latest_updated_at
+        else None
+    )
+    return summary
 
 
 def fetch_issue_details_via_github_api(
@@ -379,6 +458,84 @@ def _parse_case_name(title: str) -> str:
     return title.strip()
 
 
+def _extract_linked_pr_rows(
+    row: dict[str, Any],
+    *,
+    source_ticket_updated_at: datetime,
+) -> list[FlakyIssuePrLinkRow]:
+    timeline = _parse_timeline(row.get("timeline"))
+    issue_repo = str(row["repo"])
+    issue_number = int(row["number"])
+    links_by_pr: dict[tuple[str, int], FlakyIssuePrLinkRow] = {}
+
+    for event in timeline:
+        if str(event.get("event") or "") != "cross-referenced":
+            continue
+
+        source = event.get("source")
+        if not isinstance(source, dict):
+            continue
+
+        source_issue = source.get("issue")
+        if not isinstance(source_issue, dict):
+            continue
+
+        pull_request_meta = source_issue.get("pull_request")
+        if not isinstance(pull_request_meta, dict):
+            continue
+
+        pr_number = source_issue.get("number")
+        if pr_number is None:
+            continue
+
+        try:
+            normalized_pr_number = int(pr_number)
+        except (TypeError, ValueError):
+            continue
+
+        repository = source_issue.get("repository")
+        pr_repo = issue_repo
+        if isinstance(repository, dict):
+            repo_name = repository.get("full_name")
+            if repo_name:
+                pr_repo = str(repo_name)
+
+        linked_at = _parse_datetime(event.get("created_at") or event.get("updated_at"))
+        if linked_at is None:
+            continue
+
+        source_event_id_raw = event.get("id")
+        source_event_id = None
+        if source_event_id_raw is not None:
+            try:
+                source_event_id = int(source_event_id_raw)
+            except (TypeError, ValueError):
+                source_event_id = None
+
+        link_row = FlakyIssuePrLinkRow(
+            issue_repo=issue_repo,
+            issue_number=issue_number,
+            pr_repo=pr_repo,
+            pr_number=normalized_pr_number,
+            pr_url=f"https://github.com/{pr_repo}/pull/{normalized_pr_number}",
+            pr_title=str(source_issue.get("title") or ""),
+            link_type="linked_pull_request",
+            source_event_type="cross-referenced",
+            source_event_id=source_event_id,
+            linked_at=linked_at,
+            source_ticket_updated_at=source_ticket_updated_at,
+        )
+
+        existing = links_by_pr.get((pr_repo, normalized_pr_number))
+        if existing is None or link_row.linked_at < existing.linked_at:
+            links_by_pr[(pr_repo, normalized_pr_number)] = link_row
+
+    return sorted(
+        links_by_pr.values(),
+        key=lambda item: (item.issue_repo, item.issue_number, item.pr_repo, item.pr_number),
+    )
+
+
 def _parse_timeline(value: Any) -> list[dict[str, Any]]:
     if value is None:
         return []
@@ -434,6 +591,21 @@ def _upsert_flaky_issues(connection: Connection, rows: list[FlakyIssueRow]) -> N
     connection.execute(statement, [_row_to_params(row) for row in rows])
 
 
+def _replace_flaky_issue_pr_links(
+    connection: Connection,
+    *,
+    issue_keys: list[tuple[str, int]],
+    rows: list[FlakyIssuePrLinkRow],
+) -> None:
+    if not issue_keys:
+        return
+
+    _delete_flaky_issue_pr_links_for_issues(connection, issue_keys)
+    if rows:
+        statement = _build_issue_pr_links_upsert_statement(connection)
+        connection.execute(statement, [_issue_pr_link_to_params(row) for row in rows])
+
+
 def _row_to_params(row: FlakyIssueRow) -> dict[str, Any]:
     return {
         "repo": row.repo,
@@ -452,6 +624,46 @@ def _row_to_params(row: FlakyIssueRow) -> dict[str, Any]:
         "source_ticket_id": row.source_ticket_id,
         "source_ticket_updated_at": row.source_ticket_updated_at,
     }
+
+
+def _issue_pr_link_to_params(row: FlakyIssuePrLinkRow) -> dict[str, Any]:
+    return {
+        "issue_repo": row.issue_repo,
+        "issue_number": row.issue_number,
+        "pr_repo": row.pr_repo,
+        "pr_number": row.pr_number,
+        "pr_url": row.pr_url,
+        "pr_title": row.pr_title,
+        "link_type": row.link_type,
+        "source_event_type": row.source_event_type,
+        "source_event_id": row.source_event_id,
+        "linked_at": row.linked_at,
+        "source_ticket_updated_at": row.source_ticket_updated_at,
+    }
+
+
+def _delete_flaky_issue_pr_links_for_issues(
+    connection: Connection,
+    issue_keys: list[tuple[str, int]],
+) -> None:
+    clauses: list[str] = []
+    params: dict[str, Any] = {}
+    for index, (issue_repo, issue_number) in enumerate(issue_keys):
+        clauses.append(
+            f"(issue_repo = :issue_repo_{index} AND issue_number = :issue_number_{index})"
+        )
+        params[f"issue_repo_{index}"] = issue_repo
+        params[f"issue_number_{index}"] = issue_number
+
+    connection.execute(
+        text(
+            f"""
+            DELETE FROM ci_l1_flaky_issue_pr_links
+            WHERE {' OR '.join(clauses)}
+            """
+        ),
+        params,
+    )
 
 
 def _build_upsert_statement(connection: Connection):
@@ -561,6 +773,91 @@ def _build_upsert_statement(connection: Connection):
           last_reopened_at = VALUES(last_reopened_at),
           reopen_count = VALUES(reopen_count),
           source_ticket_id = VALUES(source_ticket_id),
+          source_ticket_updated_at = VALUES(source_ticket_updated_at),
+          updated_at = CURRENT_TIMESTAMP
+        """
+    )
+
+
+def _build_issue_pr_links_upsert_statement(connection: Connection):
+    if connection.dialect.name == "sqlite":
+        return text(
+            """
+            INSERT INTO ci_l1_flaky_issue_pr_links (
+              issue_repo,
+              issue_number,
+              pr_repo,
+              pr_number,
+              pr_url,
+              pr_title,
+              link_type,
+              source_event_type,
+              source_event_id,
+              linked_at,
+              source_ticket_updated_at,
+              created_at,
+              updated_at
+            ) VALUES (
+              :issue_repo,
+              :issue_number,
+              :pr_repo,
+              :pr_number,
+              :pr_url,
+              :pr_title,
+              :link_type,
+              :source_event_type,
+              :source_event_id,
+              :linked_at,
+              :source_ticket_updated_at,
+              CURRENT_TIMESTAMP,
+              CURRENT_TIMESTAMP
+            )
+            ON CONFLICT(issue_repo, issue_number, pr_repo, pr_number) DO UPDATE SET
+              pr_url = excluded.pr_url,
+              pr_title = excluded.pr_title,
+              link_type = excluded.link_type,
+              source_event_type = excluded.source_event_type,
+              source_event_id = excluded.source_event_id,
+              linked_at = excluded.linked_at,
+              source_ticket_updated_at = excluded.source_ticket_updated_at,
+              updated_at = CURRENT_TIMESTAMP
+            """
+        )
+
+    return text(
+        """
+        INSERT INTO ci_l1_flaky_issue_pr_links (
+          issue_repo,
+          issue_number,
+          pr_repo,
+          pr_number,
+          pr_url,
+          pr_title,
+          link_type,
+          source_event_type,
+          source_event_id,
+          linked_at,
+          source_ticket_updated_at
+        ) VALUES (
+          :issue_repo,
+          :issue_number,
+          :pr_repo,
+          :pr_number,
+          :pr_url,
+          :pr_title,
+          :link_type,
+          :source_event_type,
+          :source_event_id,
+          :linked_at,
+          :source_ticket_updated_at
+        )
+        ON DUPLICATE KEY UPDATE
+          pr_url = VALUES(pr_url),
+          pr_title = VALUES(pr_title),
+          link_type = VALUES(link_type),
+          source_event_type = VALUES(source_event_type),
+          source_event_id = VALUES(source_event_id),
+          linked_at = VALUES(linked_at),
           source_ticket_updated_at = VALUES(source_ticket_updated_at),
           updated_at = CURRENT_TIMESTAMP
         """

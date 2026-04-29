@@ -20,7 +20,10 @@ from ci_dashboard.jobs.sync_pr_events import (
     run_sync_pr_events,
     run_sync_pr_events_for_time_window,
 )
-from ci_dashboard.jobs.sync_flaky_issues import run_sync_flaky_issues
+from ci_dashboard.jobs.sync_flaky_issues import (
+    run_backfill_flaky_issue_pr_links,
+    run_sync_flaky_issues,
+)
 from ci_dashboard.jobs.sync_pods import run_reconcile_pod_linkage_for_time_window, run_sync_pods
 
 
@@ -58,6 +61,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "sync-flaky-issues",
         help="Sync flaky GitHub issues into ci_l1_flaky_issues",
+    )
+    subparsers.add_parser(
+        "backfill-flaky-issue-pr-links",
+        help="Rebuild ci_l1_flaky_issue_pr_links from github_tickets flaky issue timelines",
     )
     subparsers.add_parser(
         "sync-pods",
@@ -229,6 +236,15 @@ def main() -> int:
         summary = run_sync_flaky_issues(engine, settings)
         logging.getLogger(__name__).info(
             "sync-flaky-issues finished",
+            extra={"summary": summary.__dict__},
+        )
+        return 0
+
+    if args.command == "backfill-flaky-issue-pr-links":
+        engine = build_engine(settings)
+        summary = run_backfill_flaky_issue_pr_links(engine, settings)
+        logging.getLogger(__name__).info(
+            "backfill-flaky-issue-pr-links finished",
             extra={"summary": summary.__dict__},
         )
         return 0

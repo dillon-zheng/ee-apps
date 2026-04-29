@@ -30,12 +30,17 @@ class CommonFilters:
             "repo": self.repo,
             "branch": self.branch,
             "job_name": self.job_name,
+            "job_names": list(self.job_names),
             "cloud_phase": self.cloud_phase,
             "issue_status": self.issue_status,
             "start_date": self.start_date.isoformat() if self.start_date else None,
             "end_date": self.end_date.isoformat() if self.end_date else None,
             "granularity": self.granularity,
         }
+
+    @property
+    def job_names(self) -> tuple[str, ...]:
+        return split_filter_values(self.job_name)
 
     def without_issue_status(self) -> "CommonFilters":
         return CommonFilters(
@@ -91,9 +96,14 @@ def build_common_where(
         conditions.append(branch_match_expr(table_alias))
         params["branch"] = filters.branch
 
-    if filters.job_name:
-        conditions.append(f"{prefix}job_name = :job_name")
-        params["job_name"] = filters.job_name
+    job_clause, job_params = build_multi_value_clause(
+        f"{prefix}job_name",
+        filters.job_names,
+        bind_prefix="job_name",
+    )
+    if job_clause:
+        conditions.append(job_clause)
+        params.update(job_params)
 
     if filters.cloud_phase:
         conditions.append(f"{prefix}cloud_phase = :cloud_phase")
@@ -108,6 +118,45 @@ def build_common_where(
         params["start_time_to"] = datetime.combine(filters.end_date + timedelta(days=1), time.min)
 
     return " AND ".join(conditions), params
+
+
+def split_filter_values(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        raw_values = value.split(",")
+    elif isinstance(value, (list, tuple, set)):
+        raw_values = [str(item) for item in value]
+    else:
+        raw_values = [str(value)]
+
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for raw in raw_values:
+        item = raw.strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        normalized.append(item)
+    return tuple(normalized)
+
+
+def build_multi_value_clause(
+    column_expr: str,
+    values: tuple[str, ...],
+    *,
+    bind_prefix: str,
+) -> tuple[str | None, dict[str, Any]]:
+    if not values:
+        return None, {}
+
+    bind_names = [f"{bind_prefix}_{index}" for index in range(len(values))]
+    params = {bind_name: value for bind_name, value in zip(bind_names, values, strict=True)}
+    if len(bind_names) == 1:
+        return f"{column_expr} = :{bind_names[0]}", params
+
+    bind_list = ", ".join(f":{bind_name}" for bind_name in bind_names)
+    return f"{column_expr} IN ({bind_list})", params
 
 
 def branch_expr(table_alias: str = "") -> str:

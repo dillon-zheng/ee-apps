@@ -214,6 +214,7 @@ apply_target_sql_file "${repo_root}/sql/003_create_ci_job_state.sql"
 apply_target_sql_file "${repo_root}/sql/001_create_ci_l1_builds.sql"
 apply_target_sql_file "${repo_root}/sql/002_create_ci_l1_pr_events.sql"
 apply_target_sql_file "${repo_root}/sql/004_create_ci_l1_flaky_issues.sql"
+apply_target_sql_file "${repo_root}/sql/016_create_ci_l1_flaky_issue_pr_links.sql"
 
 import_data_from_source "prow_jobs" "${prow_where}"
 import_data_from_source "problem_case_runs" "${case_where}"

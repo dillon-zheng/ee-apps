@@ -100,8 +100,18 @@ class RefreshBuildDerivedSummary:
 class SyncFlakyIssuesSummary:
     source_rows_scanned: int = 0
     rows_written: int = 0
+    issue_pr_links_written: int = 0
     branch_fetch_attempted: int = 0
     branch_fetch_failed: int = 0
+    last_ticket_updated_at: str | None = None
+
+
+@dataclass
+class BackfillFlakyIssuePrLinksSummary:
+    batches_processed: int = 0
+    source_rows_scanned: int = 0
+    issue_rows_touched: int = 0
+    issue_pr_links_written: int = 0
     last_ticket_updated_at: str | None = None
 
 

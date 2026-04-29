@@ -125,7 +125,7 @@ Render a CronJob manifest:
 cd ci-dashboard
 ./scripts/render_flaky_issue_sync_cronjob.sh \
   --image ghcr.io/pingcap-qe/ee-apps/ci-dashboard-jobs:<tag> \
-  --db-secret ci-dashboard-backfill-db \
+  --db-secret ci-dashboard-eq-prd-insight-db \
   --github-secret prow-github \
   --ca-secret ci-dashboard-backfill-ca \
   > /tmp/ci-dashboard-sync-flaky-issues.yaml
