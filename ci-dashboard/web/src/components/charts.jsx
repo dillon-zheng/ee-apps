@@ -34,14 +34,17 @@ const SERIES_COLORS = {
   queue_avg_s: "#7f5539",
   run_avg_s: "#2a9d8f",
   total_avg_s: "#315772",
+  selected_job_total_avg_s: "#315772",
   flaky_rate_pct: "#d1495b",
   retry_loop_rate_pct: "#e9c46a",
   noisy_rate_pct: "#2a9d8f",
+  selected_job_success_rate_pct: "#f4a261",
   new_case_count: "#d1495b",
   resolved_case_count: "#2a9d8f",
   issue_created_count: "#d1495b",
   issue_closed_count: "#2a9d8f",
   issue_reopened_count: "#e9c46a",
+  issue_open_count: "#315772",
   total_failure_like_count: "#264653",
   issue_filtered_flaky_rate_pct: "#0f7c82",
   FLAKY_TEST: "#d1495b",
@@ -94,9 +97,17 @@ export function InfoHint({ text }) {
   );
 }
 
-export function Panel({ title, subtitle, children, loading, error, actions }) {
+export function Panel({
+  title,
+  subtitle,
+  children,
+  loading,
+  error,
+  actions,
+  className = "",
+}) {
   return (
-    <section className="panel">
+    <section className={`panel ${className}`.trim()}>
       <header className="panel__header">
         <div>
           <h3>{title}</h3>
@@ -144,7 +155,12 @@ export function TrendChart({
   const pointMaps = new Map(
     series.map((item) => [
       item.key,
-      new Map(item.points.map((point) => [point[0], Number(point[1] || 0)])),
+      new Map(
+        item.points.map((point) => [
+          point[0],
+          point[1] == null ? null : Number(point[1]),
+        ]),
+      ),
     ]),
   );
   const leftSeries = series.filter((item) => item.axis !== "right");
@@ -152,7 +168,9 @@ export function TrendChart({
   const leftLineSeries = leftSeries.filter((item) => item.type !== "bar");
   const leftBarSeries = leftSeries.filter((item) => item.type === "bar");
   const leftLineValues = leftLineSeries.flatMap((item) =>
-    labels.map((label) => pointMaps.get(item.key)?.get(label) ?? 0),
+    labels
+      .map((label) => pointMaps.get(item.key)?.get(label))
+      .filter((value) => value != null),
   );
   const leftBarValues = stackBars
     ? labels.map((label) =>
@@ -166,7 +184,9 @@ export function TrendChart({
       );
   const leftValues = [...leftLineValues, ...leftBarValues];
   const rightValues = rightSeries.flatMap((item) =>
-    labels.map((label) => pointMaps.get(item.key)?.get(label) ?? 0),
+    labels
+      .map((label) => pointMaps.get(item.key)?.get(label))
+      .filter((value) => value != null),
   );
   const rawLeftMaxValue = yMax ?? Math.max(...leftValues, 1);
   let leftMaxValue = rawLeftMaxValue;
@@ -283,40 +303,54 @@ export function TrendChart({
 
         {lineSeries.map((item) => {
           const axisMax = item.axis === "right" ? resolvedRightYMax : leftMaxValue;
-          const points = labels
-            .map((label, index) => {
-              const value = pointMaps.get(item.key)?.get(label) ?? 0;
-              const x = padding.left + index * xStep;
-              const y = padding.top + plotHeight - (value / axisMax) * plotHeight;
-              return `${x},${y}`;
-            })
-            .join(" ");
+          const segments = [];
+          let currentSegment = [];
+
+          labels.forEach((label, index) => {
+            const value = pointMaps.get(item.key)?.get(label);
+            if (value == null) {
+              if (currentSegment.length) {
+                segments.push(currentSegment);
+                currentSegment = [];
+              }
+              return;
+            }
+
+            const x = padding.left + index * xStep;
+            const y = padding.top + plotHeight - (value / axisMax) * plotHeight;
+            currentSegment.push({ label, x, y });
+          });
+
+          if (currentSegment.length) {
+            segments.push(currentSegment);
+          }
+
           return (
             <g key={item.key}>
-              <polyline
-                points={points}
-                fill="none"
-                stroke={seriesColor(item.key)}
-                strokeWidth="3"
-                strokeLinejoin="round"
-                strokeLinecap="round"
-              />
-              {labels.map((label, index) => {
-                const value = pointMaps.get(item.key)?.get(label) ?? 0;
-                const x = padding.left + index * xStep;
-                const y = padding.top + plotHeight - (value / axisMax) * plotHeight;
-                return (
+              {segments.map((segment, index) => (
+                <polyline
+                  key={`${item.key}-segment-${index}`}
+                  points={segment.map((point) => `${point.x},${point.y}`).join(" ")}
+                  fill="none"
+                  stroke={seriesColor(item.key)}
+                  strokeWidth="3"
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                />
+              ))}
+              {segments.flatMap((segment) =>
+                segment.map((point) => (
                   <circle
-                    key={`${item.key}-${label}`}
-                    cx={x}
-                    cy={y}
+                    key={`${item.key}-${point.label}`}
+                    cx={point.x}
+                    cy={point.y}
                     r="4.5"
                     fill={seriesColor(item.key)}
                     stroke="#fcf7ef"
                     strokeWidth="2"
                   />
-                );
-              })}
+                )),
+              )}
             </g>
           );
         })}

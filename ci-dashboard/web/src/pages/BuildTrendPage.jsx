@@ -4,7 +4,6 @@ import {
   formatCompact,
   formatDelta,
   formatPercent,
-  formatRoundedThousands,
   formatSeconds,
   sumSeriesPoints,
   useApiData,
@@ -15,7 +14,6 @@ import {
   PageIntro,
   Panel,
   RankingList,
-  RuntimeComparisonBoard,
   StatCard,
   TrendChart,
 } from "../components/charts";
@@ -24,10 +22,19 @@ export default function BuildTrendPage({ filters }) {
   const page = useApiData("/api/v1/pages/ci-status", filters);
   const [selectedRepoSlice, setSelectedRepoSlice] = useState(null);
 
-  const totalBuilds = sumSeriesPoints(page.data?.outcome_trend?.series, "total_count");
-  const successBuilds = sumSeriesPoints(page.data?.outcome_trend?.series, "success_count");
-  const failureBuilds = sumSeriesPoints(page.data?.outcome_trend?.series, "failure_count");
-  const successRate = totalBuilds ? (successBuilds * 100) / totalBuilds : 0;
+  const outcomeSummary = page.data?.outcome_trend?.meta?.summary || {};
+  const totalBuilds = Number(
+    outcomeSummary.total_count ?? sumSeriesPoints(page.data?.outcome_trend?.series, "total_count"),
+  );
+  const successBuilds = Number(
+    outcomeSummary.success_count ?? sumSeriesPoints(page.data?.outcome_trend?.series, "success_count"),
+  );
+  const failureBuilds = Number(
+    outcomeSummary.failure_count ?? sumSeriesPoints(page.data?.outcome_trend?.series, "failure_count"),
+  );
+  const successRate = Number(
+    outcomeSummary.success_rate_pct ?? (totalBuilds ? (successBuilds * 100) / totalBuilds : 0),
+  );
   const durationSummary = page.data?.duration_trend?.meta?.summary || {};
   const avgQueue = Number(durationSummary.queue_avg_s || 0);
   const avgRun = Number(durationSummary.run_avg_s || 0);
@@ -44,7 +51,6 @@ export default function BuildTrendPage({ filters }) {
     page.data?.duration_trend?.series,
     "total_avg_s",
   );
-  const cloudPostureAnnotations = buildCloudPostureAnnotations(page.data?.cloud_posture_trend?.series);
   const cloudRepoShare = page.data?.cloud_repo_share?.clouds || [];
   const gcpRepoShare = limitRepoShareItems(
     cloudRepoShare.find((cloud) => cloud.cloud_phase === "GCP"),
@@ -127,31 +133,6 @@ export default function BuildTrendPage({ filters }) {
         >
           <TrendChart series={page.data?.duration_trend?.series} yFormatter={formatSeconds} />
         </Panel>
-      </div>
-
-      <Panel
-        title="Migration status"
-        subtitle="Weekly build counts on IDC versus GCP. The value shown above each bar is GCP build count % of total builds in that week."
-        loading={page.loading}
-        error={page.error}
-      >
-        <TrendChart
-          series={page.data?.cloud_posture_trend?.series}
-          yFormatter={formatRoundedThousands}
-          bucketAnnotations={cloudPostureAnnotations}
-          height={188}
-          stackBars
-          yTickMode="thousands-rounded"
-          axisLabelSize={9}
-          bottomLabelSize={10}
-          annotationLabelSize={9}
-          barGroupWidthFactor={0.3}
-          barMaxWidth={16}
-          leftPadding={64}
-        />
-      </Panel>
-
-      <div className="page-grid page-grid--two-column">
         <Panel
           title="Longest avg success time jobs"
           subtitle="Success-only average run time ranked inside the current repo, branch, cloud, and date scope."
@@ -194,20 +175,6 @@ export default function BuildTrendPage({ filters }) {
       </div>
 
       <Panel
-        title="Migration runtime comparison"
-        subtitle="Same-job success run-time comparison. IDC baseline is the 14 days before first GCP success; GCP uses the latest 14 days ending at the selected end date. This panel ignores start date, bucket, and cloud filters."
-        loading={page.loading}
-        error={page.error}
-      >
-        <RuntimeComparisonBoard
-          improved={page.data?.migration_runtime_comparison?.improved}
-          regressed={page.data?.migration_runtime_comparison?.regressed}
-          windowDays={page.data?.migration_runtime_comparison?.meta?.window_days}
-          minSuccessRuns={page.data?.migration_runtime_comparison?.meta?.min_success_runs_each_side}
-        />
-      </Panel>
-
-      <Panel
         title="Build Count Rate grouped by Repo"
         subtitle="Compare repo build-count share on GCP and IDC. Each chart keeps the top 10 repos, merges the rest into Others, ignores repo and cloud filters, and lets you drill into repo branch mix."
         loading={page.loading}
@@ -244,22 +211,25 @@ export default function BuildTrendPage({ filters }) {
       </Panel>
 
       <Panel
-        title="Reading note"
-        subtitle="How to use this page during the first V1 iterations."
+        title="Selected job trend"
+        subtitle={buildSelectedJobTrendSubtitle(filters.job_name)}
+        loading={page.loading}
+        error={page.error}
       >
-        <div className="narrative-card">
-          <p>
-            Start here when a team says "builds feel worse this week." Look for one of three
-            shapes: a volume spike, a success-rate dip, or a duration climb. Once one of those
-            shapes appears, the Flaky page helps answer whether the problem is mostly noisy test
-            behavior or something less classified.
-          </p>
-          <ul>
-            <li>Use repo and branch filters to avoid cross-team noise.</li>
-            <li>Use cloud phase when you suspect migration or infra drift.</li>
-            <li>Expect PR enrichment fields to be best effort, not perfect.</li>
-          </ul>
-        </div>
+        {!filters.job_name ? (
+          <div className="empty-state">Please select a job.</div>
+        ) : (
+          <TrendChart
+            series={buildSelectedJobTrendSeries(
+              page.data?.outcome_trend?.series,
+              page.data?.duration_trend?.series,
+              filters,
+            )}
+            yFormatter={formatSeconds}
+            rightYFormatter={formatPercent}
+            rightYMax={100}
+          />
+        )}
       </Panel>
 
       {selectedRepoSlice ? (
@@ -279,28 +249,6 @@ export default function BuildTrendPage({ filters }) {
       ) : null}
     </div>
   );
-}
-
-function buildCloudPostureAnnotations(series) {
-  const gcpSeries = series?.find((item) => item.key === "gcp_build_count");
-  const idcSeries = series?.find((item) => item.key === "idc_build_count");
-  if (!gcpSeries || !idcSeries) {
-    return [];
-  }
-
-  const gcpByLabel = new Map(gcpSeries.points.map(([label, value]) => [label, Number(value || 0)]));
-  const idcByLabel = new Map(idcSeries.points.map(([label, value]) => [label, Number(value || 0)]));
-  return Array.from(new Set([...gcpByLabel.keys(), ...idcByLabel.keys()]))
-    .sort()
-    .map((label) => {
-      const gcpBuilds = gcpByLabel.get(label) || 0;
-      const idcBuilds = idcByLabel.get(label) || 0;
-      const totalBuilds = gcpBuilds + idcBuilds;
-      return {
-        label,
-        text: formatPercent(totalBuilds ? (gcpBuilds * 100) / totalBuilds : 0),
-      };
-    });
 }
 
 function limitRepoShareItems(cloudShare, maxItems = 10) {
@@ -341,4 +289,127 @@ function computeSeriesDelta(series, key) {
   const current = Number(target.points[target.points.length - 1][1] || 0);
   const previous = Number(target.points[target.points.length - 2][1] || 0);
   return current - previous;
+}
+
+function buildSelectedJobTrendSubtitle(jobName) {
+  if (!jobName) {
+    return "Track a selected job's success rate and success avg total duration over the current bucket setting.";
+  }
+
+  return (
+    <>
+      Track <strong>{jobName}</strong> success rate and success avg total duration over the
+      current bucket setting.
+    </>
+  );
+}
+
+function buildSelectedJobTrendSeries(outcomeSeries, durationSeries, filters) {
+  const successRateSeries = outcomeSeries?.find((item) => item.key === "success_rate_pct");
+  const durationSeriesItem = durationSeries?.find((item) => item.key === "total_avg_s");
+  const bucketLabels = buildBucketLabels(
+    filters?.start_date,
+    filters?.end_date,
+    filters?.granularity,
+  );
+  const effectiveLabels = bucketLabels.length
+    ? bucketLabels
+    : Array.from(
+        new Set([
+          ...(successRateSeries?.points.map((point) => point[0]) || []),
+          ...(durationSeriesItem?.points.map((point) => point[0]) || []),
+        ]),
+      ).sort();
+  const successRateByBucket = new Map(successRateSeries?.points || []);
+  const durationByBucket = new Map(durationSeriesItem?.points || []);
+  const series = [];
+
+  if (durationSeriesItem) {
+    series.push({
+      key: "selected_job_total_avg_s",
+      label: "Success avg total duration",
+      type: "bar",
+      axis: "left",
+      points: effectiveLabels.map((label) => [label, durationByBucket.get(label) ?? 0]),
+    });
+  }
+
+  if (successRateSeries) {
+    series.push({
+      key: "selected_job_success_rate_pct",
+      label: "Success rate",
+      type: "line",
+      axis: "right",
+      points: effectiveLabels.map((label) => [
+        label,
+        successRateByBucket.has(label) ? successRateByBucket.get(label) : null,
+      ]),
+    });
+  }
+
+  return series;
+}
+
+function buildBucketLabels(startDate, endDate, granularity) {
+  if (!startDate || !endDate) {
+    return [];
+  }
+
+  const start = parseIsoDate(startDate);
+  const end = parseIsoDate(endDate);
+  if (!start || !end || start > end) {
+    return [];
+  }
+
+  if (granularity === "week") {
+    const bounds = completeWeekBounds(start, end);
+    if (!bounds) {
+      return [];
+    }
+
+    const labels = [];
+    const cursor = new Date(bounds.firstStart);
+    while (cursor <= bounds.lastStart) {
+      labels.push(toIsoDate(cursor));
+      cursor.setUTCDate(cursor.getUTCDate() + 7);
+    }
+    return labels;
+  }
+
+  const labels = [];
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    labels.push(toIsoDate(cursor));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return labels;
+}
+
+function completeWeekBounds(start, end) {
+  const firstStart = new Date(start);
+  firstStart.setUTCDate(firstStart.getUTCDate() + ((7 - ((firstStart.getUTCDay() + 6) % 7)) % 7));
+
+  const lastStart = new Date(end);
+  lastStart.setUTCDate(lastStart.getUTCDate() - ((lastStart.getUTCDay() + 6) % 7));
+  if (end.getUTCDay() !== 0) {
+    lastStart.setUTCDate(lastStart.getUTCDate() - 7);
+  }
+
+  if (firstStart > lastStart) {
+    return null;
+  }
+
+  return { firstStart, lastStart };
+}
+
+function parseIsoDate(value) {
+  const [year, month, day] = String(value).split("-").map(Number);
+  if (!year || !month || !day) {
+    return null;
+  }
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+}
+
+function toIsoDate(value) {
+  return value.toISOString().slice(0, 10);
 }

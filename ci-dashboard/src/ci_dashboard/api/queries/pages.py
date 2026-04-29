@@ -25,6 +25,7 @@ from ci_dashboard.api.queries.filters import list_repos
 from ci_dashboard.api.queries.flaky import (
     get_distinct_flaky_case_counts_by_branch,
     get_flaky_composition,
+    get_issue_fix_progress_snapshot,
     get_issue_lifecycle_snapshot,
     get_issue_lifecycle_weekly,
     get_flaky_period_comparison,
@@ -126,6 +127,7 @@ def get_flaky_page(engine: Engine, filters: CommonFilters) -> dict[str, Any]:
                 engine,
                 filters,
             ),
+            "issue_fix_progress": lambda: get_issue_fix_progress_snapshot(engine, filters),
             "issue_lifecycle": lambda: get_issue_lifecycle_snapshot(engine, filters),
             "issue_lifecycle_weekly": lambda: get_issue_lifecycle_weekly(engine, filters),
             "issue_case_rates": lambda: get_issue_filtered_weekly_case_rates(engine, filters),

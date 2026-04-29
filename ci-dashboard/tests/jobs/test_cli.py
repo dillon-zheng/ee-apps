@@ -8,6 +8,7 @@ from ci_dashboard.common.config import DatabaseSettings, JobSettings, Settings
 from ci_dashboard.common.models import (
     AnalyzeErrorsSummary,
     ArchiveErrorLogsSummary,
+    BackfillFlakyIssuePrLinksSummary,
     ConsumeJenkinsEventsSummary,
     RefreshBuildDerivedSummary,
     ReviewErrorSummary,
@@ -173,6 +174,26 @@ def test_cli_sync_flaky_issues_dispatch(monkeypatch) -> None:
     assert cli.main() == 0
     assert called["engine"] == "engine"
     assert isinstance(called["summary"], SyncFlakyIssuesSummary)
+
+
+def test_cli_backfill_flaky_issue_pr_links_dispatch(monkeypatch) -> None:
+    called: dict[str, object] = {}
+    monkeypatch.setattr(cli, "get_settings", _settings)
+    monkeypatch.setattr(cli, "build_engine", lambda settings: called.setdefault("engine", "engine"))
+    monkeypatch.setattr(cli, "configure_logging", lambda level: None)
+    monkeypatch.setattr(
+        cli,
+        "run_backfill_flaky_issue_pr_links",
+        lambda engine, settings: called.setdefault(
+            "summary",
+            BackfillFlakyIssuePrLinksSummary(issue_rows_touched=2, issue_pr_links_written=3),
+        ),
+    )
+    monkeypatch.setattr("sys.argv", ["ci-dashboard", "backfill-flaky-issue-pr-links"])
+
+    assert cli.main() == 0
+    assert called["engine"] == "engine"
+    assert isinstance(called["summary"], BackfillFlakyIssuePrLinksSummary)
 
 
 def test_cli_sync_pods_dispatch(monkeypatch) -> None:

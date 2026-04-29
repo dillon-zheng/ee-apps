@@ -139,15 +139,26 @@ def test_build_common_where_supports_job_repo_cloud_and_date_filters() -> None:
     )
 
     assert "b.repo_full_name = :repo" in where_clause
-    assert "b.job_name = :job_name" in where_clause
+    assert "b.job_name = :job_name_0" in where_clause
     assert "b.cloud_phase = :cloud_phase" in where_clause
     assert "b.start_time >= :start_time_from" in where_clause
     assert "b.start_time < :start_time_to" in where_clause
     assert params["repo"] == "pingcap/tidb"
-    assert params["job_name"] == "ghpr_unit_test"
+    assert params["job_name_0"] == "ghpr_unit_test"
     assert params["cloud_phase"] == "GCP"
     assert params["start_time_from"] == datetime(2026, 4, 1, 0, 0, 0)
     assert params["start_time_to"] == datetime(2026, 4, 8, 0, 0, 0)
+
+
+def test_build_common_where_supports_multiple_jobs() -> None:
+    where_clause, params = build_common_where(
+        CommonFilters(job_name="job-a, job-b,job-a"),
+        table_alias="b",
+    )
+
+    assert "b.job_name IN (:job_name_0, :job_name_1)" in where_clause
+    assert params["job_name_0"] == "job-a"
+    assert params["job_name_1"] == "job-b"
 
 
 def test_query_base_helpers_cover_tidb_and_week_filters() -> None:

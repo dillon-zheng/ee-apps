@@ -9,6 +9,7 @@ from sqlalchemy.engine import Connection, Engine
 from ci_dashboard.api.queries.base import (
     CommonFilters,
     MAX_RANKING_LIMIT,
+    build_multi_value_clause,
     branch_match_expr,
     builds_table_expr,
     bucket_expr,
@@ -197,6 +198,12 @@ def get_distinct_flaky_case_counts_by_branch(
     filters: CommonFilters,
 ) -> dict[str, Any]:
     effective_repo = filters.repo or DEFAULT_DISTINCT_CASE_REPO
+    job_scope_clause, _ = build_multi_value_clause(
+        "b.job_name",
+        filters.job_names,
+        bind_prefix="job_name",
+    )
+    job_scope_sql = f"AND {job_scope_clause}" if job_scope_clause else ""
 
     with engine.begin() as connection:
         rows = connection.execute(
@@ -225,7 +232,7 @@ def get_distinct_flaky_case_counts_by_branch(
                   WHERE b.repo_full_name = :repo
                     AND b.pr_number IS NOT NULL
                     AND b.normalized_build_url IS NOT NULL
-                    {_optional_clause(filters.job_name, "AND b.job_name = :job_name")}
+                    {job_scope_sql}
                     {_optional_clause(filters.cloud_phase, "AND UPPER(COALESCE(NULLIF(b.cloud_phase, ''), 'IDC')) = :cloud_phase")}
                     {_optional_clause(filters.start_date, "AND b.start_time >= :start_time_from")}
                     {_optional_clause(filters.end_date, "AND b.start_time < :start_time_to")}
@@ -639,6 +646,88 @@ def get_issue_lifecycle_snapshot(
     }
 
 
+def get_issue_fix_progress_snapshot(
+    engine: Engine,
+    filters: CommonFilters,
+) -> dict[str, Any]:
+    effective_repo = filters.repo or DEFAULT_DISTINCT_CASE_REPO
+    as_of_date = filters.end_date or date.today()
+    comparison_as_of_date = as_of_date - timedelta(days=7)
+    scoped_filters = CommonFilters(repo=filters.repo, branch=filters.branch)
+
+    with engine.begin() as connection:
+        issue_rows = _fetch_issue_latest_rows(connection, scoped_filters, effective_repo)
+
+        current_issue_rows = [
+            row for row in issue_rows if _entity_exists_as_of(row.get("issue_created_at"), as_of_date)
+        ]
+        previous_issue_rows = [
+            row for row in issue_rows if _entity_exists_as_of(row.get("issue_created_at"), comparison_as_of_date)
+        ]
+
+        current_pull_rows = _fetch_linked_pull_rows(
+            connection,
+            [(str(row["repo"]), int(row["issue_number"])) for row in current_issue_rows],
+        )
+        previous_pull_rows = _fetch_linked_pull_rows(
+            connection,
+            [(str(row["repo"]), int(row["issue_number"])) for row in previous_issue_rows],
+        )
+
+    current_fixed_issue_count = sum(
+        1 for row in current_issue_rows if _resolve_issue_state_as_of(row, as_of_date) == "closed"
+    )
+    previous_fixed_issue_count = sum(
+        1
+        for row in previous_issue_rows
+        if _resolve_issue_state_as_of(row, comparison_as_of_date) == "closed"
+    )
+
+    current_in_review_pr_count = sum(
+        1 for row in current_pull_rows if _resolve_pull_state_as_of(row, as_of_date) == "open"
+    )
+    previous_in_review_pr_count = sum(
+        1
+        for row in previous_pull_rows
+        if _resolve_pull_state_as_of(row, comparison_as_of_date) == "open"
+    )
+    current_merged_pr_count = sum(
+        1 for row in current_pull_rows if _resolve_pull_state_as_of(row, as_of_date) == "merged"
+    )
+    previous_merged_pr_count = sum(
+        1
+        for row in previous_pull_rows
+        if _resolve_pull_state_as_of(row, comparison_as_of_date) == "merged"
+    )
+
+    meta = filters.meta()
+    meta.update(
+        {
+            "requested_repo": filters.repo,
+            "effective_repo": effective_repo,
+            "defaulted_repo": filters.repo is None,
+            "as_of_date": as_of_date.isoformat(),
+            "comparison_as_of_date": comparison_as_of_date.isoformat(),
+            "ignores_start_date": True,
+            "ignores_job_name": True,
+            "ignores_cloud_phase": True,
+            "ignores_issue_status": True,
+        }
+    )
+
+    return {
+        "meta": meta,
+        "filed_issue_count": len(current_issue_rows),
+        "filed_issue_delta": len(current_issue_rows) - len(previous_issue_rows),
+        "fixed_issue_count": current_fixed_issue_count,
+        "fixed_issue_delta": current_fixed_issue_count - previous_fixed_issue_count,
+        "in_review_pr_count": current_in_review_pr_count,
+        "in_review_pr_delta": current_in_review_pr_count - previous_in_review_pr_count,
+        "merged_pr_count": current_merged_pr_count,
+        "merged_pr_delta": current_merged_pr_count - previous_merged_pr_count,
+    }
+
+
 def get_issue_lifecycle_weekly(
     engine: Engine,
     filters: CommonFilters,
@@ -669,6 +758,7 @@ def get_issue_lifecycle_weekly(
     created_by_week = {week: 0 for week in weeks}
     closed_by_week = {week: 0 for week in weeks}
     reopened_by_week = {week: 0 for week in weeks}
+    open_by_week = {week: 0 for week in weeks}
 
     for row in scoped_issue_rows:
         created_at = _parse_datetime_value(row.get("issue_created_at"))
@@ -688,6 +778,16 @@ def get_issue_lifecycle_weekly(
             week = _week_start_iso_from_datetime(reopened_at)
             if week in reopened_by_week:
                 reopened_by_week[week] += 1
+
+    for week in weeks:
+        week_start = date.fromisoformat(week)
+        week_end = week_start + timedelta(days=6)
+        as_of_date = min(week_end, filters.end_date) if filters.end_date else week_end
+        open_by_week[week] = sum(
+            1
+            for row in scoped_issue_rows
+            if _resolve_issue_state_as_of(row, as_of_date) == "open"
+        )
 
     meta = filters.meta()
     meta.update(
@@ -722,6 +822,13 @@ def get_issue_lifecycle_weekly(
                 "type": "bar",
                 "axis": "left",
                 "points": [[week, reopened_by_week.get(week, 0)] for week in weeks],
+            },
+            {
+                "key": "issue_open_count",
+                "label": "Open issues at week end",
+                "type": "line",
+                "axis": "right",
+                "points": [[week, open_by_week.get(week, 0)] for week in weeks],
             },
         ],
         "meta": meta,
@@ -865,6 +972,12 @@ def _fetch_issue_weekly_rate_rows(
     effective_repo: str,
 ) -> list[dict[str, Any]]:
     issue_scope_ctes, issue_params = _build_issue_scope_ctes(filters, effective_repo)
+    job_scope_clause, _ = build_multi_value_clause(
+        "b.job_name",
+        filters.job_names,
+        bind_prefix="job_name",
+    )
+    job_scope_sql = f"AND {job_scope_clause}" if job_scope_clause else ""
     rows = connection.execute(
         text(
             f"""
@@ -893,7 +1006,7 @@ def _fetch_issue_weekly_rate_rows(
               WHERE b.repo_full_name = :repo
                 AND b.pr_number IS NOT NULL
                 AND b.normalized_build_url IS NOT NULL
-                {_optional_clause(filters.job_name, "AND b.job_name = :job_name")}
+                {job_scope_sql}
                 {_optional_clause(filters.cloud_phase, "AND UPPER(COALESCE(NULLIF(b.cloud_phase, ''), 'IDC')) = :cloud_phase")}
                 {_optional_clause(filters.start_date, "AND b.start_time >= :start_time_from")}
                 {_optional_clause(filters.end_date, "AND b.start_time < :start_time_to")}
@@ -1015,6 +1128,12 @@ def _fetch_weekly_flaky_case_presence(
     filters: CommonFilters,
     effective_repo: str,
 ) -> list[dict[str, Any]]:
+    job_scope_clause, _ = build_multi_value_clause(
+        "b.job_name",
+        filters.job_names,
+        bind_prefix="job_name",
+    )
+    job_scope_sql = f"AND {job_scope_clause}" if job_scope_clause else ""
     rows = connection.execute(
         text(
             f"""
@@ -1041,7 +1160,7 @@ def _fetch_weekly_flaky_case_presence(
               WHERE b.repo_full_name = :repo
                 AND b.pr_number IS NOT NULL
                 AND b.normalized_build_url IS NOT NULL
-                {_optional_clause(filters.job_name, "AND b.job_name = :job_name")}
+                {job_scope_sql}
                 {_optional_clause(filters.cloud_phase, "AND UPPER(COALESCE(NULLIF(b.cloud_phase, ''), 'IDC')) = :cloud_phase")}
                 {_optional_clause(filters.start_date, "AND b.start_time >= :start_time_from")}
                 {_optional_clause(filters.end_date, "AND b.start_time < :start_time_to")}
@@ -1219,6 +1338,47 @@ def _fetch_issue_latest_rows(
     return [dict(row) for row in rows]
 
 
+def _fetch_linked_pull_rows(
+    connection: Connection,
+    issue_keys: list[tuple[str, int]],
+) -> list[dict[str, Any]]:
+    if not issue_keys:
+        return []
+
+    clauses: list[str] = []
+    params: dict[str, Any] = {}
+    for index, (issue_repo, issue_number) in enumerate(issue_keys):
+        clauses.append(
+            f"(l.issue_repo = :issue_repo_{index} AND l.issue_number = :issue_number_{index})"
+        )
+        params[f"issue_repo_{index}"] = issue_repo
+        params[f"issue_number_{index}"] = issue_number
+
+    rows = connection.execute(
+        text(
+            f"""
+            SELECT DISTINCT
+              p.repo,
+              p.number,
+              p.state,
+              p.created_at,
+              p.closed_at,
+              p.merged,
+              p.merged_at
+            FROM ci_l1_flaky_issue_pr_links l
+            JOIN github_tickets p
+              ON p.type = 'pull'
+             AND p.repo = l.pr_repo
+             AND p.number = l.pr_number
+            WHERE {' OR '.join(clauses)}
+            ORDER BY p.repo, p.number
+            """
+        ),
+        params,
+    ).mappings()
+    return [dict(row) for row in rows]
+
+
 def _latest_complete_week_start(end_date: date | None) -> date | None:
     if end_date is None:
         return None
@@ -1247,6 +1407,65 @@ def _week_start_iso_from_datetime(value: datetime | None) -> str | None:
         return None
     week_start = value.date() - timedelta(days=value.date().weekday())
     return week_start.isoformat()
+
+
+def _entity_exists_as_of(value: Any, as_of_date: date) -> bool:
+    timestamp = _parse_datetime_value(value)
+    if timestamp is None:
+        return False
+    return timestamp < datetime.combine(as_of_date + timedelta(days=1), datetime.min.time())
+
+
+def _resolve_issue_state_as_of(row: dict[str, Any], as_of_date: date) -> str | None:
+    if not _entity_exists_as_of(row.get("issue_created_at"), as_of_date):
+        return None
+
+    as_of_exclusive = datetime.combine(as_of_date + timedelta(days=1), datetime.min.time())
+    latest_state = "open"
+    latest_event_time = _parse_datetime_value(row.get("issue_created_at")) or datetime.min
+
+    issue_closed_at = _parse_datetime_value(row.get("issue_closed_at"))
+    if issue_closed_at is not None and issue_closed_at < as_of_exclusive and issue_closed_at >= latest_event_time:
+        latest_state = "closed"
+        latest_event_time = issue_closed_at
+
+    last_reopened_at = _parse_datetime_value(row.get("last_reopened_at"))
+    if (
+        last_reopened_at is not None
+        and last_reopened_at < as_of_exclusive
+        and last_reopened_at >= latest_event_time
+    ):
+        latest_state = "open"
+        latest_event_time = last_reopened_at
+
+    current_status = str(row.get("issue_status") or "").lower()
+    if current_status == "closed" and issue_closed_at is None:
+        return "closed"
+    return latest_state
+
+
+def _resolve_pull_state_as_of(row: dict[str, Any], as_of_date: date) -> str | None:
+    if not _entity_exists_as_of(row.get("created_at"), as_of_date):
+        return None
+
+    as_of_exclusive = datetime.combine(as_of_date + timedelta(days=1), datetime.min.time())
+    latest_state = "open"
+    latest_event_time = _parse_datetime_value(row.get("created_at")) or datetime.min
+
+    closed_at = _parse_datetime_value(row.get("closed_at"))
+    if closed_at is not None and closed_at < as_of_exclusive and closed_at >= latest_event_time:
+        latest_state = "closed"
+        latest_event_time = closed_at
+
+    merged_at = _parse_datetime_value(row.get("merged_at"))
+    if merged_at is not None and merged_at < as_of_exclusive and merged_at >= latest_event_time:
+        latest_state = "merged"
+        latest_event_time = merged_at
+
+    current_state = str(row.get("state") or "").lower()
+    if current_state == "closed" and closed_at is None and merged_at is None:
+        return "closed"
+    return latest_state
 
 
 def _issue_overlaps_window(
@@ -1294,9 +1513,14 @@ def _build_build_where(
         conditions.append(branch_match_expr(table_alias))
         params["branch"] = filters.branch
 
-    if filters.job_name:
-        conditions.append(f"{prefix}job_name = :job_name")
-        params["job_name"] = filters.job_name
+    job_clause, job_params = build_multi_value_clause(
+        f"{prefix}job_name",
+        filters.job_names,
+        bind_prefix="job_name",
+    )
+    if job_clause:
+        conditions.append(job_clause)
+        params.update(job_params)
 
     if filters.cloud_phase:
         conditions.append(f"{prefix}cloud_phase = :cloud_phase")
@@ -1317,8 +1541,12 @@ def _distinct_case_params(filters: CommonFilters, effective_repo: str) -> dict[s
     params: dict[str, Any] = {"repo": effective_repo}
     if filters.branch:
         params["branch"] = filters.branch
-    if filters.job_name:
-        params["job_name"] = filters.job_name
+    _, job_params = build_multi_value_clause(
+        "b.job_name",
+        filters.job_names,
+        bind_prefix="job_name",
+    )
+    params.update(job_params)
     if filters.cloud_phase:
         params["cloud_phase"] = filters.cloud_phase.upper()
     if filters.start_date:
@@ -1343,7 +1571,10 @@ def _optional_clause(value: object | None, clause: str) -> str:
 
 def _normalize_case_build_key_expr(connection: Connection, column_name: str) -> str:
     if connection.dialect.name == "sqlite":
-        return f"normalize_build_url({column_name})"
+        return (
+            f"REPLACE(normalize_build_url({column_name}), "
+            "'https://do.pingcap.net/', 'https://prow.tidb.net/')"
+        )
 
     trimmed = f"TRIM(COALESCE({column_name}, ''))"
     without_redirect = f"REPLACE({trimmed}, '/display/redirect', '')"
@@ -1351,7 +1582,7 @@ def _normalize_case_build_key_expr(connection: Connection, column_name: str) -> 
         "CASE "
         f"WHEN {without_redirect} = '' THEN NULL "
         f"WHEN {without_redirect} LIKE 'https://prow.tidb.net/%' THEN 'https://prow.tidb.net' "
-        f"WHEN {without_redirect} LIKE 'https://do.pingcap.net/%' THEN 'https://do.pingcap.net' "
+        f"WHEN {without_redirect} LIKE 'https://do.pingcap.net/%' THEN 'https://prow.tidb.net' "
         f"WHEN {without_redirect} REGEXP '^https?://jenkins\\\\.jenkins\\\\.svc\\\\.cluster\\\\.local(:[0-9]+)?/' THEN 'https://prow.tidb.net' "
         f"WHEN {without_redirect} NOT REGEXP '^https?://' THEN 'https://prow.tidb.net' "
         "ELSE NULL "

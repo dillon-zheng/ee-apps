@@ -4,7 +4,6 @@ import { NavLink } from "react-router-dom";
 export function DashboardLayout({
   filters,
   onFilterChange,
-  onResetFilters,
   filterOptions,
   children,
 }) {
@@ -20,6 +19,7 @@ export function DashboardLayout({
           <NavItem to="/" label="Overview" caption="Signal at a glance" />
           <NavItem to="/ci-status" label="CI Status" caption="Volume and duration" />
           <NavItem to="/flaky" label="Flaky" caption="Noisy failures and blind-retry-loop patterns" />
+          <NavItem to="/migrate-status" label="GCP Migration" caption="GCP rollout and runtime drift" />
         </nav>
 
         <div className="sidebar-note">
@@ -35,7 +35,6 @@ export function DashboardLayout({
         <FilterBar
           filters={filters}
           onFilterChange={onFilterChange}
-          onResetFilters={onResetFilters}
           filterOptions={filterOptions}
         />
         <main className="page-content">{children}</main>
@@ -59,8 +58,7 @@ function NavItem({ to, label, caption }) {
   );
 }
 
-function FilterBar({ filters, onFilterChange, onResetFilters, filterOptions }) {
-  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+function FilterBar({ filters, onFilterChange, filterOptions }) {
   const [isCompact, setIsCompact] = useState(false);
   const scopePills = [
     { label: "Repo", value: filters.repo || "All repos" },
@@ -102,18 +100,6 @@ function FilterBar({ filters, onFilterChange, onResetFilters, filterOptions }) {
         <div className="filter-bar__header-copy">
           <span className="filter-bar__eyebrow">Global filters</span>
           <h2>{filterOptions.scopeLabel}</h2>
-        </div>
-        <div className="filter-bar__actions">
-          <button
-            className="ghost-button ghost-button--secondary"
-            type="button"
-            onClick={() => setShowAdvancedFilters((current) => !current)}
-          >
-            {showAdvancedFilters ? "Less filters" : "More filters"}
-          </button>
-          <button className="ghost-button" type="button" onClick={onResetFilters}>
-            Reset
-          </button>
         </div>
       </div>
 
@@ -185,69 +171,65 @@ function FilterBar({ filters, onFilterChange, onResetFilters, filterOptions }) {
         />
       </div>
 
-      {showAdvancedFilters ? (
-        <div className="filter-grid filter-grid--advanced">
-          <FilterField
-            label="Job"
-            className="filter-field--job"
-            control={
-              <select
-                value={filters.job_name}
-                onChange={(event) => onFilterChange("job_name", event.target.value)}
-                disabled={!filterOptions.jobs.length}
-              >
-                <option value="">All jobs</option>
-                {filterOptions.jobs.map((item) => (
-                  <option key={item.value} value={item.value}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            }
-          />
-          <FilterField
-            label="Cloud"
-            control={
-              <select
-                value={filters.cloud_phase}
-                onChange={(event) => onFilterChange("cloud_phase", event.target.value)}
-              >
-                <option value="">All clouds</option>
-                {filterOptions.cloudPhases.map((item) => (
-                  <option key={item.value} value={item.value}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            }
-          />
-          <FilterField
-            label="Issue status"
-            control={
-              <select
-                value={filters.issue_status}
-                onChange={(event) => onFilterChange("issue_status", event.target.value)}
-              >
-                <option value="">All issues</option>
-                <option value="open">Open</option>
-                <option value="closed">Closed</option>
-              </select>
-            }
-          />
-          <FilterField
-            label="Bucket"
-            control={
-              <select
-                value={filters.granularity}
-                onChange={(event) => onFilterChange("granularity", event.target.value)}
-              >
-                <option value="day">Day</option>
-                <option value="week">Week</option>
-              </select>
-            }
-          />
-        </div>
-      ) : null}
+      <div className="filter-grid filter-grid--advanced">
+        <FilterField
+          label="Job"
+          control={
+            <select
+              value={filters.job_name}
+              onChange={(event) => onFilterChange("job_name", event.target.value)}
+            >
+              <option value="">All jobs</option>
+              {filterOptions.jobs.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          }
+        />
+        <FilterField
+          label="Cloud"
+          control={
+            <select
+              value={filters.cloud_phase}
+              onChange={(event) => onFilterChange("cloud_phase", event.target.value)}
+            >
+              <option value="">All clouds</option>
+              {filterOptions.cloudPhases.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          }
+        />
+        <FilterField
+          label="Issue status"
+          control={
+            <select
+              value={filters.issue_status}
+              onChange={(event) => onFilterChange("issue_status", event.target.value)}
+            >
+              <option value="">All issues</option>
+              <option value="open">Open</option>
+              <option value="closed">Closed</option>
+            </select>
+          }
+        />
+        <FilterField
+          label="Bucket"
+          control={
+            <select
+              value={filters.granularity}
+              onChange={(event) => onFilterChange("granularity", event.target.value)}
+            >
+              <option value="day">Day</option>
+              <option value="week">Week</option>
+            </select>
+          }
+        />
+      </div>
     </section>
   );
 }
