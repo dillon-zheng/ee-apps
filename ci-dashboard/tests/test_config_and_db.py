@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ci_dashboard.common.config import get_settings, load_settings
+from ci_dashboard.common.config import _read_bool, get_settings, load_settings
 from ci_dashboard.common.db import _build_connect_args, build_engine, install_sqlite_functions
 from ci_dashboard.common.logging import configure_logging
 
@@ -70,6 +70,23 @@ def test_load_settings_supports_db_url() -> None:
 def test_load_settings_hides_runtime_insights_by_default() -> None:
     settings = load_settings({"CI_DASHBOARD_DB_URL": "sqlite+pysqlite:///tmp/example.db"})
     assert settings.features.runtime_insights_enabled is False
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("1", True),
+        ("true", True),
+        ("yes", True),
+        ("on", True),
+        ("0", False),
+        ("false", False),
+        ("no", False),
+        ("off", False),
+    ],
+)
+def test_read_bool_accepts_common_boolean_values(raw: str, expected: bool) -> None:
+    assert _read_bool({"TEST_FLAG": raw}, "TEST_FLAG", not expected) is expected
 
 
 def test_load_settings_requires_tidb_fields_without_db_url() -> None:

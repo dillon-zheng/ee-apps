@@ -715,30 +715,33 @@ def test_frontend_uses_configured_static_dir(tmp_path: Path, monkeypatch) -> Non
     assert response.text == "configured-ok"
 
 
-def test_navigation_page_hides_runtime_insights_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+def _get_navigation_response(monkeypatch: pytest.MonkeyPatch, runtime_insights: str | None = None):
     get_settings.cache_clear()
     monkeypatch.setenv("CI_DASHBOARD_DB_URL", "sqlite+pysqlite:///:memory:")
-    monkeypatch.delenv("CI_DASHBOARD_ENABLE_RUNTIME_INSIGHTS", raising=False)
+    if runtime_insights is None:
+        monkeypatch.delenv("CI_DASHBOARD_ENABLE_RUNTIME_INSIGHTS", raising=False)
+    else:
+        monkeypatch.setenv("CI_DASHBOARD_ENABLE_RUNTIME_INSIGHTS", runtime_insights)
 
-    with TestClient(create_app()) as client:
-        response = client.get("/api/v1/pages/navigation")
+    try:
+        with TestClient(create_app()) as client:
+            return client.get("/api/v1/pages/navigation")
+    finally:
+        get_settings.cache_clear()
+
+
+def test_navigation_page_hides_runtime_insights_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    response = _get_navigation_response(monkeypatch)
 
     assert response.status_code == 200
     assert response.json()["features"]["runtime_insights_enabled"] is False
-    get_settings.cache_clear()
 
 
 def test_navigation_page_can_enable_runtime_insights(monkeypatch: pytest.MonkeyPatch) -> None:
-    get_settings.cache_clear()
-    monkeypatch.setenv("CI_DASHBOARD_DB_URL", "sqlite+pysqlite:///:memory:")
-    monkeypatch.setenv("CI_DASHBOARD_ENABLE_RUNTIME_INSIGHTS", "true")
-
-    with TestClient(create_app()) as client:
-        response = client.get("/api/v1/pages/navigation")
+    response = _get_navigation_response(monkeypatch, "true")
 
     assert response.status_code == 200
     assert response.json()["features"]["runtime_insights_enabled"] is True
-    get_settings.cache_clear()
 
 
 def test_status_and_filter_endpoints(api_client: TestClient, sqlite_engine) -> None:

@@ -55,7 +55,9 @@ export default function App() {
     <RuntimeInsightsPage filters={filters} />
   ) : runtimeInsightsReady ? (
     <Navigate to={CI_STATUS_PATH} replace />
-  ) : null;
+  ) : (
+    <div className="empty-state">Loading feature settings...</div>
+  );
 
   useEffect(() => {
     if (location.pathname !== "/flaky") {
