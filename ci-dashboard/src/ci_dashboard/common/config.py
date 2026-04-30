@@ -33,7 +33,9 @@ def _read_bool(environ: Mapping[str, str], key: str, default: bool) -> bool:
         return True
     if value in {"0", "false", "no", "n", "off"}:
         return False
-    raise ValueError(f"{key} must be a boolean, got {raw!r}")
+    raise ValueError(
+        f"{key} must be a boolean (accepted values: true/false, yes/no, 1/0, on/off), got {raw!r}"
+    )
 
 
 def _read_csv(environ: Mapping[str, str], key: str, default: tuple[str, ...]) -> tuple[str, ...]:

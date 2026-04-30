@@ -77,16 +77,25 @@ def test_load_settings_hides_runtime_insights_by_default() -> None:
     [
         ("1", True),
         ("true", True),
+        (" TRUE ", True),
         ("yes", True),
+        ("Y", True),
         ("on", True),
         ("0", False),
         ("false", False),
+        (" False ", False),
         ("no", False),
+        ("N", False),
         ("off", False),
     ],
 )
 def test_read_bool_accepts_common_boolean_values(raw: str, expected: bool) -> None:
     assert _read_bool({"TEST_FLAG": raw}, "TEST_FLAG", not expected) is expected
+
+
+def test_read_bool_uses_default_for_missing_or_empty_values() -> None:
+    assert _read_bool({}, "TEST_FLAG", True) is True
+    assert _read_bool({"TEST_FLAG": "   "}, "TEST_FLAG", False) is False
 
 
 def test_load_settings_requires_tidb_fields_without_db_url() -> None:
@@ -175,7 +184,7 @@ def test_load_settings_rejects_invalid_archive_limit() -> None:
 def test_load_settings_rejects_invalid_runtime_insights_flag() -> None:
     with pytest.raises(
         ValueError,
-        match=r"CI_DASHBOARD_ENABLE_RUNTIME_INSIGHTS must be a boolean, got 'maybe'",
+        match=r"CI_DASHBOARD_ENABLE_RUNTIME_INSIGHTS must be a boolean .* got 'maybe'",
     ):
         load_settings(
             {
