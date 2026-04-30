@@ -35,6 +35,7 @@ def test_load_settings_supports_db_url() -> None:
             "CI_DASHBOARD_LLM_API_KEY": "test-key",
             "CI_DASHBOARD_LLM_BASE_URL": "https://api-vip.codex-for.me/v1",
             "CI_DASHBOARD_LLM_REASONING_EFFORT": "high",
+            "CI_DASHBOARD_ENABLE_RUNTIME_INSIGHTS": "true",
             "CI_DASHBOARD_LOG_LEVEL": "debug",
         }
     )
@@ -62,7 +63,13 @@ def test_load_settings_supports_db_url() -> None:
     assert settings.llm.api_key == "test-key"
     assert settings.llm.base_url == "https://api-vip.codex-for.me/v1"
     assert settings.llm.reasoning_effort == "high"
+    assert settings.features.runtime_insights_enabled is True
     assert settings.log_level == "DEBUG"
+
+
+def test_load_settings_hides_runtime_insights_by_default() -> None:
+    settings = load_settings({"CI_DASHBOARD_DB_URL": "sqlite+pysqlite:///tmp/example.db"})
+    assert settings.features.runtime_insights_enabled is False
 
 
 def test_load_settings_requires_tidb_fields_without_db_url() -> None:
@@ -144,6 +151,19 @@ def test_load_settings_rejects_invalid_archive_limit() -> None:
             {
                 "CI_DASHBOARD_DB_URL": "sqlite+pysqlite:///tmp/example.db",
                 "CI_DASHBOARD_ARCHIVE_BUILD_LIMIT": "0",
+            }
+        )
+
+
+def test_load_settings_rejects_invalid_runtime_insights_flag() -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"CI_DASHBOARD_ENABLE_RUNTIME_INSIGHTS must be a boolean, got 'maybe'",
+    ):
+        load_settings(
+            {
+                "CI_DASHBOARD_DB_URL": "sqlite+pysqlite:///tmp/example.db",
+                "CI_DASHBOARD_ENABLE_RUNTIME_INSIGHTS": "maybe",
             }
         )
 

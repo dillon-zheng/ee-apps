@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.engine import Engine
 
 from ci_dashboard.api.dependencies import get_engine
@@ -14,10 +14,20 @@ from ci_dashboard.api.queries.pages import (
 )
 from ci_dashboard.api.queries.runtime import get_error_builds, get_error_top_jobs
 from ci_dashboard.api.routes.common import get_common_filters
-from fastapi import Query
+from ci_dashboard.common.config import get_settings
 
 
 router = APIRouter(prefix="/api/v1/pages", tags=["pages"])
+
+
+@router.get("/navigation")
+def navigation_page() -> dict[str, object]:
+    settings = get_settings()
+    return {
+        "features": {
+            "runtime_insights_enabled": settings.features.runtime_insights_enabled,
+        }
+    }
 
 
 @router.get("/overview")

@@ -9,6 +9,7 @@ from sqlalchemy import text
 
 from ci_dashboard.api.dependencies import get_engine
 from ci_dashboard.api.main import app, create_app
+from ci_dashboard.common.config import get_settings
 from ci_dashboard.jobs.build_url_matcher import normalize_build_url
 
 
@@ -712,6 +713,32 @@ def test_frontend_uses_configured_static_dir(tmp_path: Path, monkeypatch) -> Non
 
     assert response.status_code == 200
     assert response.text == "configured-ok"
+
+
+def test_navigation_page_hides_runtime_insights_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    get_settings.cache_clear()
+    monkeypatch.setenv("CI_DASHBOARD_DB_URL", "sqlite+pysqlite:///:memory:")
+    monkeypatch.delenv("CI_DASHBOARD_ENABLE_RUNTIME_INSIGHTS", raising=False)
+
+    with TestClient(create_app()) as client:
+        response = client.get("/api/v1/pages/navigation")
+
+    assert response.status_code == 200
+    assert response.json()["features"]["runtime_insights_enabled"] is False
+    get_settings.cache_clear()
+
+
+def test_navigation_page_can_enable_runtime_insights(monkeypatch: pytest.MonkeyPatch) -> None:
+    get_settings.cache_clear()
+    monkeypatch.setenv("CI_DASHBOARD_DB_URL", "sqlite+pysqlite:///:memory:")
+    monkeypatch.setenv("CI_DASHBOARD_ENABLE_RUNTIME_INSIGHTS", "true")
+
+    with TestClient(create_app()) as client:
+        response = client.get("/api/v1/pages/navigation")
+
+    assert response.status_code == 200
+    assert response.json()["features"]["runtime_insights_enabled"] is True
+    get_settings.cache_clear()
 
 
 def test_status_and_filter_endpoints(api_client: TestClient, sqlite_engine) -> None:
