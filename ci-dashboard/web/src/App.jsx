@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Route, Routes, useLocation } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { DashboardLayout } from "./components/layout";
 import OverviewPage from "./pages/OverviewPage";
@@ -48,6 +48,16 @@ export default function App() {
   const defaultRange = getDefaultDateRange();
   const location = useLocation();
   const [filters, setFilters] = useState(() => buildDefaultFilters(defaultRange, location.pathname));
+  const navigation = useApiData("/api/v1/pages/navigation");
+  const runtimeInsightsEnabled = navigation.data?.features?.runtime_insights_enabled === true;
+  const runtimeInsightsReady = !navigation.loading;
+  const runtimeInsightsRoute = runtimeInsightsEnabled ? (
+    <RuntimeInsightsPage filters={filters} />
+  ) : runtimeInsightsReady ? (
+    <Navigate to={CI_STATUS_PATH} replace />
+  ) : (
+    <div className="empty-state">Loading feature settings...</div>
+  );
 
   useEffect(() => {
     if (location.pathname !== "/flaky") {
@@ -139,12 +149,13 @@ export default function App() {
       filters={filters}
       onFilterChange={handleFilterChange}
       filterOptions={filterOptions}
+      features={{ runtimeInsightsEnabled }}
     >
       <Routes>
         <Route path="/" element={<OverviewPage filters={filters} />} />
         <Route path={CI_STATUS_PATH} element={<BuildTrendPage filters={filters} />} />
         <Route path={MIGRATE_STATUS_PATH} element={<MigrateStatusPage filters={filters} />} />
-        <Route path={RUNTIME_INSIGHTS_PATH} element={<RuntimeInsightsPage filters={filters} />} />
+        <Route path={RUNTIME_INSIGHTS_PATH} element={runtimeInsightsRoute} />
         <Route path="/flaky" element={<FlakyPage filters={filters} />} />
       </Routes>
     </DashboardLayout>

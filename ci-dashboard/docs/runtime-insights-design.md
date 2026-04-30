@@ -37,6 +37,10 @@ This document defines the first design for that experimental tab.
 
 Add a standalone dashboard tab named `Runtime Insights`.
 
+The tab is hidden by default in production while the charts are still being
+validated. Operators can expose it by setting
+`CI_DASHBOARD_ENABLE_RUNTIME_INSIGHTS=true`.
+
 Purpose:
 - provide an experimental space for pod, Jenkins, and error-classification
   charts
