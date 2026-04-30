@@ -14,15 +14,14 @@ from ci_dashboard.api.queries.pages import (
 )
 from ci_dashboard.api.queries.runtime import get_error_builds, get_error_top_jobs
 from ci_dashboard.api.routes.common import get_common_filters
-from ci_dashboard.common.config import get_settings
+from ci_dashboard.common.config import Settings, get_settings
 
 
 router = APIRouter(prefix="/api/v1/pages", tags=["pages"])
 
 
 @router.get("/navigation")
-def navigation_page() -> dict[str, object]:
-    settings = get_settings()
+def navigation_page(settings: Settings = Depends(get_settings)) -> dict[str, object]:
     return {
         "features": {
             "runtime_insights_enabled": settings.features.runtime_insights_enabled,

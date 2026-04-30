@@ -26,9 +26,11 @@ def _read_int(environ: Mapping[str, str], key: str, default: int) -> int:
 
 def _read_bool(environ: Mapping[str, str], key: str, default: bool) -> bool:
     raw = environ.get(key)
-    if raw is None or raw.strip() == "":
+    if raw is None:
         return default
     value = raw.strip().lower()
+    if value == "":
+        return default
     if value in {"1", "true", "yes", "y", "on"}:
         return True
     if value in {"0", "false", "no", "n", "off"}:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -9,7 +10,7 @@ from sqlalchemy import text
 
 from ci_dashboard.api.dependencies import get_engine
 from ci_dashboard.api.main import app, create_app
-from ci_dashboard.common.config import get_settings
+from ci_dashboard.common.config import FeatureSettings, get_settings, load_settings
 from ci_dashboard.jobs.build_url_matcher import normalize_build_url
 
 
@@ -715,30 +716,30 @@ def test_frontend_uses_configured_static_dir(tmp_path: Path, monkeypatch) -> Non
     assert response.text == "configured-ok"
 
 
-def _get_navigation_response(monkeypatch: pytest.MonkeyPatch, runtime_insights: str | None = None):
-    get_settings.cache_clear()
-    monkeypatch.setenv("CI_DASHBOARD_DB_URL", "sqlite+pysqlite:///:memory:")
-    if runtime_insights is None:
-        monkeypatch.delenv("CI_DASHBOARD_ENABLE_RUNTIME_INSIGHTS", raising=False)
-    else:
-        monkeypatch.setenv("CI_DASHBOARD_ENABLE_RUNTIME_INSIGHTS", runtime_insights)
+def _get_navigation_response(runtime_insights_enabled: bool):
+    settings = replace(
+        load_settings({"CI_DASHBOARD_DB_URL": "sqlite+pysqlite:///:memory:"}),
+        features=FeatureSettings(runtime_insights_enabled=runtime_insights_enabled),
+    )
+    test_app = create_app()
+    test_app.dependency_overrides[get_settings] = lambda: settings
 
     try:
-        with TestClient(create_app()) as client:
+        with TestClient(test_app) as client:
             return client.get("/api/v1/pages/navigation")
     finally:
-        get_settings.cache_clear()
+        test_app.dependency_overrides.clear()
 
 
-def test_navigation_page_hides_runtime_insights_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    response = _get_navigation_response(monkeypatch)
+def test_navigation_page_hides_runtime_insights_by_default() -> None:
+    response = _get_navigation_response(False)
 
     assert response.status_code == 200
     assert response.json()["features"]["runtime_insights_enabled"] is False
 
 
-def test_navigation_page_can_enable_runtime_insights(monkeypatch: pytest.MonkeyPatch) -> None:
-    response = _get_navigation_response(monkeypatch, "true")
+def test_navigation_page_can_enable_runtime_insights() -> None:
+    response = _get_navigation_response(True)
 
     assert response.status_code == 200
     assert response.json()["features"]["runtime_insights_enabled"] is True
