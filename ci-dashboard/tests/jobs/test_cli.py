@@ -17,6 +17,7 @@ from ci_dashboard.common.models import (
     SyncFlakyIssuesSummary,
     SyncPodsSummary,
     SyncPrEventsSummary,
+    WatchPodsSummary,
 )
 from ci_dashboard.jobs import cli
 
@@ -212,6 +213,28 @@ def test_cli_sync_pods_dispatch(monkeypatch) -> None:
     assert cli.main() == 0
     assert called["engine"] == "engine"
     assert isinstance(called["summary"], SyncPodsSummary)
+
+
+def test_cli_watch_pods_dispatch(monkeypatch) -> None:
+    called: dict[str, object] = {}
+    monkeypatch.setattr(cli, "get_settings", lambda: _settings())
+    monkeypatch.setattr(cli, "build_engine", lambda settings: called.setdefault("engine", "engine"))
+    monkeypatch.setattr(cli, "configure_logging", lambda level: None)
+
+    def fake_run_watch_pods(engine, settings, *, max_events):
+        called["engine_arg"] = engine
+        called["settings"] = settings
+        called["max_events"] = max_events
+        return called.setdefault("summary", WatchPodsSummary(pod_snapshots_seen=1))
+
+    monkeypatch.setattr(cli, "run_watch_pods", fake_run_watch_pods)
+    monkeypatch.setattr("sys.argv", ["ci-dashboard", "watch-pods", "--max-events", "1"])
+
+    assert cli.main() == 0
+    assert called["engine"] == "engine"
+    assert called["engine_arg"] == "engine"
+    assert called["max_events"] == 1
+    assert isinstance(called["summary"], WatchPodsSummary)
 
 
 def test_cli_repair_job_names_dispatch(monkeypatch) -> None:

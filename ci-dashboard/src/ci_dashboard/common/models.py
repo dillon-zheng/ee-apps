@@ -127,6 +127,16 @@ class SyncPodsSummary:
 
 
 @dataclass
+class WatchPodsSummary:
+    pod_snapshots_seen: int = 0
+    event_rows_seen: int = 0
+    event_rows_written: int = 0
+    lifecycle_rows_upserted: int = 0
+    pods_touched: int = 0
+    watch_restarts: int = 0
+
+
+@dataclass
 class ConsumeJenkinsEventsSummary:
     messages_polled: int = 0
     events_processed: int = 0

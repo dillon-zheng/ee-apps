@@ -56,6 +56,49 @@ Notes:
   - Kafka bootstrap service: `cluster-cd-kafka-bootstrap:9092`
   - Jenkins service DNS for internal callers: `http://jenkins.jenkins.svc.cluster.local`
 
+## Pod Watcher
+
+`watch-pods` is the long-running pod lifecycle collector. It runs in `apps` by
+default and records Pod `metadata.creationTimestamp` as `pod_created_at`.
+
+Preconditions:
+
+- apply `017_alter_ci_l1_pod_lifecycle_add_pod_created_at.sql`
+- grant `apps/ci-dashboard` `get/list/watch` on `pods` and `events` in watched namespaces
+
+```bash
+cd ci-dashboard
+./scripts/render_pod_watcher_rbac.sh \
+  --service-account-namespace apps \
+  --service-account-name ci-dashboard \
+  --target-namespaces prow-test-pods,jenkins-tidb,jenkins-tiflow \
+  | kubectl apply -f -
+```
+
+Render and apply the Deployment:
+
+```bash
+./scripts/render_pod_watcher_deployment.sh \
+  --image ghcr.io/pingcap-qe/ee-apps/ci-dashboard-jobs:<tag> \
+  --db-secret ci-dashboard-db \
+  --ca-secret ci-dashboard-ca \
+  --gcp-project pingcap-testing-account \
+  --service-account ci-dashboard \
+  --cluster-name prow \
+  --location us-central1-c \
+  > /tmp/ci-dashboard-pod-watcher.yaml
+kubectl apply -f /tmp/ci-dashboard-pod-watcher.yaml
+kubectl -n apps rollout status deployment/ci-dashboard-pod-watcher
+```
+
+Validation:
+
+```bash
+kubectl -n apps get deployment ci-dashboard-pod-watcher
+kubectl -n apps get pods -l app.kubernetes.io/name=ci-dashboard-pod-watcher
+kubectl -n apps logs deployment/ci-dashboard-pod-watcher --tail=200
+```
+
 ## Hourly Pod Sync
 
 `sync-pods` incrementally reads Cloud Logging `k8s_pod` events and writes:
