@@ -14,6 +14,7 @@ watch_timeout_seconds="300"
 retry_delay_seconds="5"
 health_port="8081"
 stale_after_seconds="720"
+jenkins_prefix_cache_seconds="900"
 log_level="INFO"
 image_pull_policy="IfNotPresent"
 service_account=""
@@ -45,6 +46,8 @@ Optional:
   --retry-delay-seconds N       Delay before reconnect after a watch error. Default: 5
   --health-port N               HTTP health port exposed by watch-pods. Default: 8081
   --stale-after-seconds N       Mark watch streams unhealthy after no heartbeat. Default: 720
+  --jenkins-prefix-cache-seconds N
+                                Cache Jenkins pod-name prefix lookup for N seconds. Default: 900
   --log-level LEVEL             CI_DASHBOARD_LOG_LEVEL override. Default: INFO
   --image-pull-policy P         Image pull policy. Default: IfNotPresent
   --service-account NAME        Optional service account name.
@@ -110,6 +113,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --stale-after-seconds)
       stale_after_seconds="${2:-}"
+      shift 2
+      ;;
+    --jenkins-prefix-cache-seconds)
+      jenkins_prefix_cache_seconds="${2:-}"
       shift 2
       ;;
     --log-level)
@@ -264,6 +271,8 @@ ${service_account_block}
               value: "${health_port}"
             - name: CI_DASHBOARD_POD_WATCH_STALE_AFTER_SECONDS
               value: "${stale_after_seconds}"
+            - name: CI_DASHBOARD_JENKINS_POD_NAME_PREFIX_CACHE_SECONDS
+              value: "${jenkins_prefix_cache_seconds}"
 ${cluster_env_block}${ca_env_block}
           startupProbe:
             httpGet:

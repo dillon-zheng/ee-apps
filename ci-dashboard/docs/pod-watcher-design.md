@@ -76,12 +76,32 @@ Rollout precondition: migration `017_alter_ci_l1_pod_lifecycle_add_pod_created_a
 must be applied before `watch-pods` starts, otherwise metadata writes will fail because the
 watcher persists Pod `metadata.creationTimestamp` into `ci_l1_pod_lifecycle.pod_created_at`.
 
-## 6. Health And Self-Healing
+## 6. Runtime Configuration
+
+Required:
+
+- `CI_DASHBOARD_GCP_PROJECT` or `CI_DASHBOARD_POD_WATCH_SOURCE_PROJECT`: source project stored in pod tables.
+- `CI_DASHBOARD_POD_EVENT_NAMESPACES`: comma-separated namespaces to watch.
+
+Recommended defaults:
+
+- `CI_DASHBOARD_POD_WATCH_TIMEOUT_SECONDS=300`
+- `CI_DASHBOARD_POD_WATCH_RETRY_DELAY_SECONDS=5`
+- `CI_DASHBOARD_POD_WATCH_HEALTH_PORT=8081`
+- `CI_DASHBOARD_POD_WATCH_STALE_AFTER_SECONDS=720`
+- `CI_DASHBOARD_JENKINS_POD_NAME_PREFIX_CACHE_SECONDS=900`
+
+Optional metadata:
+
+- `CI_DASHBOARD_KUBERNETES_CLUSTER_NAME`
+- `CI_DASHBOARD_KUBERNETES_LOCATION`
+
+## 7. Health And Self-Healing
 
 The watcher exposes `/livez` and `/readyz` from the same process. Each watched
 namespace registers two heartbeat streams, `<namespace>/pods` and
-`<namespace>/events`. Heartbeats update after each successful list and watch
-response, including bookmarks. If any stream is stale beyond
+`<namespace>/events`. Heartbeats update after each successful list, watch
+response, and persistence batch. If any stream is stale beyond
 `CI_DASHBOARD_POD_WATCH_STALE_AFTER_SECONDS`, health checks fail and Kubernetes
 restarts the Pod.
 
@@ -94,7 +114,7 @@ Recommended first probe settings:
 - liveness probe: `/livez`
 - readiness probe: `/readyz`
 
-## 7. Dashboard Semantics
+## 8. Dashboard Semantics
 
 Scheduling wait should only use rows where:
 
@@ -110,7 +130,7 @@ GKE it is often an intermediate retry signal. The dashboard should emphasize:
 - image pull latency distribution
 - image pull error/backoff counts
 
-## 8. Failure Handling
+## 9. Failure Handling
 
 Writes are idempotent:
 
@@ -119,10 +139,12 @@ Writes are idempotent:
 
 The worker records job state under `ci-watch-pods`. Restart is safe because
 writes are idempotent and startup relist refreshes current Pod metadata. Watch
-streams are not a durable historical log, so Pods created and deleted while the
-watcher is down can still be missed.
+`410 Gone` / expired resource-version events relist immediately; other watch
+errors reconnect after the retry delay. Watch streams are not a durable
+historical log, so Pods created and deleted while the watcher is down can still
+be missed.
 
-## 9. Rollout Plan
+## 10. Rollout Plan
 
 1. Deploy with `replicas=1`.
 2. Validate fresh rows have `pod_created_at`, labels, annotations, and `Scheduled`.
@@ -130,7 +152,7 @@ watcher is down can still be missed.
 4. Update dashboard cards to count scheduling wait only for complete watcher-backed rows.
 5. Keep `sync-pods` temporarily, but never use Cloud Logging `Created` as Pod creation time.
 
-## 10. Open Follow-Ups
+## 11. Open Follow-Ups
 
 - add a freshness monitor for latest `metadata_observed_at` by namespace
 - add durable watch state only if startup relist is not precise enough

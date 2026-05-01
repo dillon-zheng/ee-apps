@@ -13,6 +13,7 @@ from ci_dashboard.common.config import DatabaseSettings, JobSettings, Settings
 from ci_dashboard.common.models import WatchPodsSummary
 from ci_dashboard.jobs import pod_watcher as watcher
 from ci_dashboard.jobs.pod_watcher import (
+    _JenkinsPodNameUrlPrefixCache,
     WatchedPodSnapshot,
     WatchHealthState,
     WatchRuntimeContext,
@@ -21,6 +22,7 @@ from ci_dashboard.jobs.pod_watcher import (
     _build_event_source_insert_id,
     _build_lifecycle_rows_for_snapshots,
     _format_watch_error,
+    _is_resource_version_expired_watch_error,
     _load_runtime_context,
     _normalize_kubernetes_event,
     _normalize_pod_object,
@@ -56,6 +58,65 @@ def _runtime_context() -> WatchRuntimeContext:
         source_project="pingcap-testing-account",
         cluster_name="prow",
         location="us-central1-c",
+    )
+
+
+def _watched_snapshot(
+    *,
+    namespace_name: str = "jenkins-tidb",
+    pod_name: str = "agent-pod",
+    pod_uid: str = "uid-a",
+    labels: dict[str, str] | None = None,
+    annotations: dict[str, str] | None = None,
+    observed_at: datetime = datetime(2026, 5, 1, 1, 0, 2),
+    creation_timestamp: datetime = datetime(2026, 5, 1, 1, 0, 1),
+) -> WatchedPodSnapshot:
+    return WatchedPodSnapshot(
+        source_project="pingcap-testing-account",
+        cluster_name="prow",
+        location="us-central1-c",
+        namespace_name=namespace_name,
+        pod_name=pod_name,
+        pod_uid=pod_uid,
+        snapshot=PodMetadataSnapshot(
+            pod_uid=pod_uid,
+            labels=labels or {},
+            annotations=annotations or {},
+            observed_at=observed_at,
+            creation_timestamp=creation_timestamp,
+        ),
+    )
+
+
+def _pod_event(
+    *,
+    namespace_name: str = "jenkins-tidb",
+    pod_name: str = "agent-pod",
+    pod_uid: str = "uid-a",
+    reason: str = "Scheduled",
+    timestamp: datetime = datetime(2026, 5, 1, 1, 0, 5),
+    insert_id: str = "kubernetes-event:sched",
+    component: str = "default-scheduler",
+    instance: str = "scheduler",
+    message: str = "Successfully assigned",
+) -> NormalizedPodEvent:
+    return NormalizedPodEvent(
+        source_project="pingcap-testing-account",
+        cluster_name="prow",
+        location="us-central1-c",
+        namespace_name=namespace_name,
+        pod_name=pod_name,
+        pod_uid=pod_uid,
+        event_reason=reason,
+        event_type="Normal",
+        event_message=message,
+        event_timestamp=timestamp,
+        receive_timestamp=timestamp,
+        first_timestamp=timestamp,
+        last_timestamp=timestamp,
+        reporting_component=component,
+        reporting_instance=instance,
+        source_insert_id=insert_id,
     )
 
 
@@ -278,6 +339,8 @@ def test_runtime_context_and_helper_edge_cases(monkeypatch) -> None:
         '{"code": "410", "message": "too old", "reason": "Gone"}'
     )
     assert _format_watch_error({"type": "ERROR"}) == "unknown Kubernetes watch error"
+    assert _is_resource_version_expired_watch_error({"object": {"reason": "Gone", "code": 410}}) is True
+    assert _is_resource_version_expired_watch_error({"object": {"reason": "Forbidden", "code": 403}}) is False
     assert _build_event_source_insert_id({"metadata": {"uid": "uid-a"}}) == "kubernetes-event:uid-a"
     assert _build_event_source_insert_id(
         {"metadata": {"namespace": "ns", "name": "event-name", "resourceVersion": "rv"}}
@@ -376,68 +439,30 @@ def test_snapshot_lifecycle_keeps_metadata_when_events_arrive_later(sqlite_engin
             )
         )
 
-    snapshot = WatchedPodSnapshot(
-        source_project="pingcap-testing-account",
-        cluster_name="prow",
-        location="us-central1-c",
-        namespace_name="jenkins-tidb",
-        pod_name="agent-pod",
-        pod_uid="uid-a",
-        snapshot=PodMetadataSnapshot(
-            pod_uid="uid-a",
-            labels={
-                "author": "alice",
-                "org": "pingcap",
-                "repo": "tidb",
-                "jenkins/label": "pingcap_tidb_ghpr_unit_test_42-abcd",
-            },
-            annotations={
-                "buildUrl": "http://jenkins.jenkins.svc.cluster.local:80/jenkins/job/pingcap/job/tidb/job/ghpr_unit_test/42/",
-                "ci_job": "pingcap/tidb/ghpr_unit_test",
-            },
-            observed_at=datetime(2026, 5, 1, 1, 0, 2),
-            creation_timestamp=datetime(2026, 5, 1, 1, 0, 1),
-        ),
+    snapshot = _watched_snapshot(
+        labels={
+            "author": "alice",
+            "org": "pingcap",
+            "repo": "tidb",
+            "jenkins/label": "pingcap_tidb_ghpr_unit_test_42-abcd",
+        },
+        annotations={
+            "buildUrl": "http://jenkins.jenkins.svc.cluster.local:80/jenkins/job/pingcap/job/tidb/job/ghpr_unit_test/42/",
+            "ci_job": "pingcap/tidb/ghpr_unit_test",
+        },
     )
 
     assert _persist_pod_snapshots(sqlite_engine, _settings(), [snapshot]) == 1
 
     rows = [
-        NormalizedPodEvent(
-            source_project="pingcap-testing-account",
-            cluster_name="prow",
-            location="us-central1-c",
-            namespace_name="jenkins-tidb",
-            pod_name="agent-pod",
-            pod_uid="uid-a",
-            event_reason="Scheduled",
-            event_type="Normal",
-            event_message="Successfully assigned",
-            event_timestamp=datetime(2026, 5, 1, 1, 0, 5),
-            receive_timestamp=datetime(2026, 5, 1, 1, 0, 6),
-            first_timestamp=datetime(2026, 5, 1, 1, 0, 5),
-            last_timestamp=datetime(2026, 5, 1, 1, 0, 5),
-            reporting_component="default-scheduler",
-            reporting_instance="scheduler",
-            source_insert_id="kubernetes-event:sched",
-        ),
-        NormalizedPodEvent(
-            source_project="pingcap-testing-account",
-            cluster_name="prow",
-            location="us-central1-c",
-            namespace_name="jenkins-tidb",
-            pod_name="agent-pod",
-            pod_uid="uid-a",
-            event_reason="Started",
-            event_type="Normal",
-            event_message="Started container",
-            event_timestamp=datetime(2026, 5, 1, 1, 0, 25),
-            receive_timestamp=datetime(2026, 5, 1, 1, 0, 26),
-            first_timestamp=datetime(2026, 5, 1, 1, 0, 25),
-            last_timestamp=datetime(2026, 5, 1, 1, 0, 25),
-            reporting_component="kubelet",
-            reporting_instance="node-a",
-            source_insert_id="kubernetes-event:started",
+        _pod_event(),
+        _pod_event(
+            reason="Started",
+            timestamp=datetime(2026, 5, 1, 1, 0, 25),
+            insert_id="kubernetes-event:started",
+            component="kubelet",
+            instance="node-a",
+            message="Started container",
         ),
     ]
 
@@ -475,38 +500,17 @@ def test_snapshot_lifecycle_keeps_metadata_when_events_arrive_later(sqlite_engin
 
 
 def test_build_lifecycle_rows_for_snapshots_uses_existing_event_aggregates(sqlite_engine) -> None:
-    snapshot = WatchedPodSnapshot(
-        source_project="pingcap-testing-account",
-        cluster_name="prow",
-        location="us-central1-c",
+    snapshot = _watched_snapshot(
         namespace_name="prow-test-pods",
         pod_name="prow-pod",
         pod_uid="uid-prow",
-        snapshot=PodMetadataSnapshot(
-            pod_uid="uid-prow",
-            labels={"prow.k8s.io/job": "ghpr_unit_test"},
-            annotations={},
-            observed_at=datetime(2026, 5, 1, 1, 0, 2),
-            creation_timestamp=datetime(2026, 5, 1, 1, 0, 1),
-        ),
+        labels={"prow.k8s.io/job": "ghpr_unit_test"},
     )
-    event = NormalizedPodEvent(
-        source_project="pingcap-testing-account",
-        cluster_name="prow",
-        location="us-central1-c",
+    event = _pod_event(
         namespace_name="prow-test-pods",
         pod_name="prow-pod",
         pod_uid="uid-prow",
-        event_reason="Scheduled",
-        event_type="Normal",
-        event_message="Successfully assigned",
-        event_timestamp=datetime(2026, 5, 1, 1, 0, 5),
-        receive_timestamp=datetime(2026, 5, 1, 1, 0, 6),
-        first_timestamp=datetime(2026, 5, 1, 1, 0, 5),
-        last_timestamp=datetime(2026, 5, 1, 1, 0, 5),
-        reporting_component="default-scheduler",
-        reporting_instance="scheduler",
-        source_insert_id="kubernetes-event:prow-sched",
+        insert_id="kubernetes-event:prow-sched",
     )
     _persist_pod_events(sqlite_engine, _settings(), [event])
 
@@ -516,3 +520,90 @@ def test_build_lifecycle_rows_for_snapshots_uses_existing_event_aggregates(sqlit
     assert len(rows) == 1
     assert rows[0]["scheduled_at"] == datetime(2026, 5, 1, 1, 0, 5)
     assert rows[0]["pod_created_at"] == datetime(2026, 5, 1, 1, 0, 1)
+
+
+def test_persist_paths_cache_jenkins_prefixes_and_refresh_heartbeat(sqlite_engine, monkeypatch) -> None:
+    load_calls = 0
+
+    def fake_load_prefixes(connection):
+        nonlocal load_calls
+        load_calls += 1
+        return {
+            "ghpr-unit-test": "https://prow.tidb.net/jenkins/job/pingcap/job/tidb/job/ghpr_unit_test/"
+        }
+
+    monkeypatch.setattr(watcher, "_load_jenkins_pod_name_url_prefix_map", fake_load_prefixes)
+    cache = _JenkinsPodNameUrlPrefixCache(ttl_seconds=900)
+    heartbeats = 0
+
+    def heartbeat() -> None:
+        nonlocal heartbeats
+        heartbeats += 1
+
+    snapshots = [
+        WatchedPodSnapshot(
+            source_project="pingcap-testing-account",
+            cluster_name="prow",
+            location="us-central1-c",
+            namespace_name="jenkins-tidb",
+            pod_name=f"ghpr-unit-test-1234{index}-abcd",
+            pod_uid=f"uid-cache-{index}",
+            snapshot=PodMetadataSnapshot(
+                pod_uid=f"uid-cache-{index}",
+                labels={},
+                annotations={},
+                observed_at=datetime(2026, 5, 1, 1, index, 2),
+                creation_timestamp=datetime(2026, 5, 1, 1, index, 1),
+            ),
+        )
+        for index in range(2)
+    ]
+
+    assert (
+        _persist_pod_snapshots(
+            sqlite_engine,
+            _settings(batch_size=1),
+            snapshots,
+            jenkins_prefix_cache=cache,
+            on_batch_persisted=heartbeat,
+        )
+        == 2
+    )
+    assert load_calls == 1
+    assert heartbeats == 2
+
+    event_cache = _JenkinsPodNameUrlPrefixCache(ttl_seconds=900)
+    events = [
+        NormalizedPodEvent(
+            source_project="pingcap-testing-account",
+            cluster_name="prow",
+            location="us-central1-c",
+            namespace_name="jenkins-tidb",
+            pod_name=f"ghpr-unit-test-2234{index}-abcd",
+            pod_uid=f"uid-event-cache-{index}",
+            event_reason="Scheduled",
+            event_type="Normal",
+            event_message="Successfully assigned",
+            event_timestamp=datetime(2026, 5, 1, 2, index, 5),
+            receive_timestamp=datetime(2026, 5, 1, 2, index, 6),
+            first_timestamp=datetime(2026, 5, 1, 2, index, 5),
+            last_timestamp=datetime(2026, 5, 1, 2, index, 5),
+            reporting_component="default-scheduler",
+            reporting_instance="scheduler",
+            source_insert_id=f"kubernetes-event:cache-{index}",
+        )
+        for index in range(2)
+    ]
+
+    assert (
+        _persist_pod_events(
+            sqlite_engine,
+            _settings(batch_size=1),
+            events,
+            jenkins_prefix_cache=event_cache,
+            on_batch_persisted=heartbeat,
+        )
+        == (2, 2, 2)
+    )
+    assert load_calls == 2
+    assert heartbeats == 4

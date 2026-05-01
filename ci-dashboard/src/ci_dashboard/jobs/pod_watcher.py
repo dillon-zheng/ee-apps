@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
@@ -40,6 +40,7 @@ from ci_dashboard.jobs.sync_pods import (
     _infer_pod_build_system,
     _json_loads_str_mapping,
     _load_build_metadata_map,
+    _load_jenkins_pod_name_url_prefix_map,
     _load_target_namespaces,
     _null_safe_equals_sql,
     _parse_datetime,
@@ -56,6 +57,7 @@ DEFAULT_WATCH_TIMEOUT_SECONDS = 300
 DEFAULT_WATCH_RETRY_DELAY_SECONDS = 5
 DEFAULT_HEALTH_PORT = 8081
 DEFAULT_HEALTH_STALE_AFTER_SECONDS = 720
+DEFAULT_JENKINS_PREFIX_CACHE_SECONDS = 900
 POD_WATCH_TYPES = frozenset({"ADDED", "MODIFIED"})
 EVENT_WATCH_TYPES = frozenset({"ADDED", "MODIFIED"})
 
@@ -156,6 +158,26 @@ class _ProgressRecorder:
                 self._stop_event.set()
 
 
+class _JenkinsPodNameUrlPrefixCache:
+    def __init__(self, *, ttl_seconds: int) -> None:
+        self._ttl_seconds = ttl_seconds
+        self._prefixes: dict[str, str] | None = None
+        self._expires_at = 0.0
+        self._lock = threading.Lock()
+
+    def get(self, connection: Connection) -> dict[str, str]:
+        now = time.monotonic()
+        with self._lock:
+            if self._prefixes is not None and (
+                self._ttl_seconds == 0 or now < self._expires_at
+            ):
+                return self._prefixes
+            prefixes = _load_jenkins_pod_name_url_prefix_map(connection)
+            self._prefixes = prefixes
+            self._expires_at = float("inf") if self._ttl_seconds == 0 else now + self._ttl_seconds
+            return prefixes
+
+
 class _KubernetesClient:
     def __init__(
         self,
@@ -237,6 +259,12 @@ def run_watch_pods(
     recorder = _ProgressRecorder(summary, max_events=max_events, stop_event=stop_event)
     worker_errors: queue.Queue[BaseException] = queue.Queue()
     context = _load_runtime_context()
+    jenkins_prefix_cache = _JenkinsPodNameUrlPrefixCache(
+        ttl_seconds=_read_non_negative_int_env(
+            "CI_DASHBOARD_JENKINS_POD_NAME_PREFIX_CACHE_SECONDS",
+            DEFAULT_JENKINS_PREFIX_CACHE_SECONDS,
+        )
+    )
     watch_timeout_seconds = _read_int_env(
         "CI_DASHBOARD_POD_WATCH_TIMEOUT_SECONDS",
         DEFAULT_WATCH_TIMEOUT_SECONDS,
@@ -285,6 +313,7 @@ def run_watch_pods(
                         "stream_key": pod_stream_key,
                         "health_state": health_state,
                         "recorder": recorder,
+                        "jenkins_prefix_cache": jenkins_prefix_cache,
                         "stop_event": stop_event,
                     },
                 },
@@ -308,6 +337,7 @@ def run_watch_pods(
                         "stream_key": event_stream_key,
                         "health_state": health_state,
                         "recorder": recorder,
+                        "jenkins_prefix_cache": jenkins_prefix_cache,
                         "stop_event": stop_event,
                     },
                 },
@@ -328,27 +358,26 @@ def run_watch_pods(
             except queue.Empty:
                 continue
 
-        stop_event.set()
-        for thread in threads:
-            thread.join(timeout=5)
-        if health_server is not None:
-            health_server.shutdown()
-            health_server.server_close()
-
         if not worker_errors.empty():
             raise worker_errors.get()
 
         with engine.begin() as connection:
             mark_job_succeeded(connection, JOB_NAME, {"namespaces": namespaces})
         return summary
-    except Exception as exc:
+    except BaseException as exc:
         stop_event.set()
-        if health_server is not None:
-            health_server.shutdown()
-            health_server.server_close()
         with engine.begin() as connection:
             mark_job_failed(connection, JOB_NAME, {"namespaces": namespaces}, str(exc))
         raise
+    finally:
+        stop_event.set()
+        for thread in threads:
+            thread.join(timeout=5)
+            if thread.is_alive():
+                logger.warning("pod watcher thread did not exit cleanly: %s", thread.name)
+        if health_server is not None:
+            health_server.shutdown()
+            health_server.server_close()
 
 
 def _worker_guard(
@@ -375,6 +404,7 @@ def _run_pod_worker(
     stream_key: str,
     health_state: WatchHealthState,
     recorder: _ProgressRecorder,
+    jenkins_prefix_cache: _JenkinsPodNameUrlPrefixCache,
     stop_event: threading.Event,
 ) -> None:
     while not stop_event.is_set():
@@ -395,6 +425,8 @@ def _run_pod_worker(
                 engine,
                 settings,
                 snapshots,
+                jenkins_prefix_cache=jenkins_prefix_cache,
+                on_batch_persisted=lambda: health_state.heartbeat(stream_key),
             )
             recorder.add(
                 pod_snapshots_seen=len(snapshots),
@@ -412,6 +444,13 @@ def _run_pod_worker(
                 health_state.heartbeat(stream_key)
                 event_type = _coerce_str(watch_event.get("type"))
                 if event_type == "ERROR":
+                    if _is_resource_version_expired_watch_error(watch_event):
+                        recorder.add(watch_restarts=1)
+                        logger.info(
+                            "pod watch resource version expired for namespace %s; relisting",
+                            namespace_name,
+                        )
+                        break
                     raise RuntimeError(_format_watch_error(watch_event))
                 if event_type not in POD_WATCH_TYPES:
                     continue
@@ -425,6 +464,8 @@ def _run_pod_worker(
                     engine,
                     settings,
                     [snapshot],
+                    jenkins_prefix_cache=jenkins_prefix_cache,
+                    on_batch_persisted=lambda: health_state.heartbeat(stream_key),
                 )
                 recorder.add(
                     pod_snapshots_seen=1,
@@ -453,6 +494,7 @@ def _run_event_worker(
     stream_key: str,
     health_state: WatchHealthState,
     recorder: _ProgressRecorder,
+    jenkins_prefix_cache: _JenkinsPodNameUrlPrefixCache,
     stop_event: threading.Event,
 ) -> None:
     while not stop_event.is_set():
@@ -473,6 +515,8 @@ def _run_event_worker(
                 engine,
                 settings,
                 normalized_rows,
+                jenkins_prefix_cache=jenkins_prefix_cache,
+                on_batch_persisted=lambda: health_state.heartbeat(stream_key),
             )
             recorder.add(
                 event_rows_seen=len(normalized_rows),
@@ -491,6 +535,13 @@ def _run_event_worker(
                 health_state.heartbeat(stream_key)
                 event_type = _coerce_str(watch_event.get("type"))
                 if event_type == "ERROR":
+                    if _is_resource_version_expired_watch_error(watch_event):
+                        recorder.add(watch_restarts=1)
+                        logger.info(
+                            "event watch resource version expired for namespace %s; relisting",
+                            namespace_name,
+                        )
+                        break
                     raise RuntimeError(_format_watch_error(watch_event))
                 if event_type not in EVENT_WATCH_TYPES:
                     continue
@@ -504,6 +555,8 @@ def _run_event_worker(
                     engine,
                     settings,
                     [normalized],
+                    jenkins_prefix_cache=jenkins_prefix_cache,
+                    on_batch_persisted=lambda: health_state.heartbeat(stream_key),
                 )
                 recorder.add(
                     event_rows_seen=1,
@@ -527,17 +580,32 @@ def _persist_pod_snapshots(
     engine: Engine,
     settings: Settings,
     snapshots: list[WatchedPodSnapshot],
+    *,
+    jenkins_prefix_cache: _JenkinsPodNameUrlPrefixCache | None = None,
+    on_batch_persisted: Callable[[], None] | None = None,
 ) -> int:
     if not snapshots:
         return 0
 
     rows_written = 0
     for batch in chunked(snapshots, settings.jobs.batch_size):
+        batch = list(batch)
         with engine.begin() as connection:
-            lifecycle_rows = _build_lifecycle_rows_for_snapshots(connection, list(batch))
+            jenkins_prefixes = _get_jenkins_prefixes_if_needed(
+                connection,
+                [snapshot.identity for snapshot in batch],
+                jenkins_prefix_cache,
+            )
+            lifecycle_rows = _build_lifecycle_rows_for_snapshots(
+                connection,
+                batch,
+                jenkins_pod_name_url_prefixes=jenkins_prefixes,
+            )
             if lifecycle_rows:
                 _upsert_pod_lifecycle(connection, lifecycle_rows)
                 rows_written += len(lifecycle_rows)
+        if on_batch_persisted is not None:
+            on_batch_persisted()
     return rows_written
 
 
@@ -545,6 +613,9 @@ def _persist_pod_events(
     engine: Engine,
     settings: Settings,
     rows: list[NormalizedPodEvent],
+    *,
+    jenkins_prefix_cache: _JenkinsPodNameUrlPrefixCache | None = None,
+    on_batch_persisted: Callable[[], None] | None = None,
 ) -> tuple[int, int, int]:
     if not rows:
         return 0, 0, 0
@@ -566,6 +637,11 @@ def _persist_pod_events(
         with engine.begin() as connection:
             _upsert_pod_events(connection, [row.as_db_params() for row in batch])
             event_rows_written += len(batch)
+            jenkins_prefixes = _get_jenkins_prefixes_if_needed(
+                connection,
+                batch_identities,
+                jenkins_prefix_cache,
+            )
 
             pod_metadata_by_identity = _load_existing_pod_metadata_snapshots(
                 connection,
@@ -575,10 +651,13 @@ def _persist_pod_events(
                 connection,
                 _sort_identities(batch_identities),
                 pod_metadata_by_identity=pod_metadata_by_identity,
+                jenkins_pod_name_url_prefixes=jenkins_prefixes,
             )
             if lifecycle_rows:
                 _upsert_pod_lifecycle(connection, lifecycle_rows)
                 lifecycle_rows_written += len(lifecycle_rows)
+        if on_batch_persisted is not None:
+            on_batch_persisted()
         touched_pods.update(batch_identities)
     return event_rows_written, lifecycle_rows_written, len(touched_pods)
 
@@ -586,6 +665,8 @@ def _persist_pod_events(
 def _build_lifecycle_rows_for_snapshots(
     connection: Connection,
     snapshots: list[WatchedPodSnapshot],
+    *,
+    jenkins_pod_name_url_prefixes: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     snapshot_by_identity = {snapshot.identity: snapshot.snapshot for snapshot in snapshots}
     identities = _sort_identities(snapshot_by_identity)
@@ -593,6 +674,7 @@ def _build_lifecycle_rows_for_snapshots(
         connection,
         identities,
         pod_metadata_by_identity=snapshot_by_identity,
+        jenkins_pod_name_url_prefixes=jenkins_pod_name_url_prefixes,
     )
     event_rows_by_identity = {
         _pod_identity_from_values(
@@ -613,6 +695,7 @@ def _build_lifecycle_rows_for_snapshots(
         connection,
         metadata_only_rows,
         pod_metadata_by_identity=snapshot_by_identity,
+        jenkins_pod_name_url_prefixes=jenkins_pod_name_url_prefixes,
     )
 
     rows = list(event_rows)
@@ -946,6 +1029,15 @@ def _format_watch_error(watch_event: dict[str, Any]) -> str:
     return "unknown Kubernetes watch error"
 
 
+def _is_resource_version_expired_watch_error(watch_event: dict[str, Any]) -> bool:
+    raw_object = watch_event.get("object")
+    if not isinstance(raw_object, dict):
+        return False
+    code = _coerce_str(raw_object.get("code"))
+    reason = _coerce_str(raw_object.get("reason"))
+    return code == "410" or reason in {"Expired", "Gone"}
+
+
 def _sleep_until_retry(stop_event: threading.Event) -> None:
     retry_delay = _read_int_env(
         "CI_DASHBOARD_POD_WATCH_RETRY_DELAY_SECONDS",
@@ -973,3 +1065,15 @@ def _sort_identities(
     identities: Iterable[tuple[str, str | None, str | None, str | None]],
 ) -> list[tuple[str, str | None, str | None, str | None]]:
     return sorted(identities, key=lambda item: tuple(value or "" for value in item))
+
+
+def _get_jenkins_prefixes_if_needed(
+    connection: Connection,
+    identities: Iterable[tuple[str, str | None, str | None, str | None]],
+    jenkins_prefix_cache: _JenkinsPodNameUrlPrefixCache | None,
+) -> dict[str, str] | None:
+    if jenkins_prefix_cache is None:
+        return None
+    if any(_infer_pod_build_system(namespace_name) == "JENKINS" for _, namespace_name, _, _ in identities):
+        return jenkins_prefix_cache.get(connection)
+    return None
