@@ -6,12 +6,12 @@ Last updated: 2026-05-01
 
 ## 1. Problem
 
-The current pod ingestion path combines two imperfect sources:
-
-- Cloud Logging Kubernetes events have better historical coverage, but they do not carry the full Pod object metadata. In particular, Cloud Logging `Created` is a container-created event, not the Pod `metadata.creationTimestamp`, so it must not be used as pod creation time.
-- Ad hoc Kubernetes API lookup has complete Pod metadata, labels, annotations, and `metadata.creationTimestamp`, but it can only read Pods that still exist when the sync job runs. Short-lived CI Pods are often gone by then.
-
-This makes scheduling metrics unreliable. We can safely show lifecycle metrics only when we have the actual Pod creation time and the `Scheduled` event for the same Pod identity.
+The current pod ingestion path has two incomplete sources: Cloud Logging covers
+more history but lacks full Pod metadata and true Pod creation time, while ad hoc
+Kubernetes API lookup has full metadata but misses short-lived Pods after they
+are deleted. Cloud Logging `Created` is a container-created event, not Pod
+`metadata.creationTimestamp`, so scheduling wait must not use it as Pod creation
+time.
 
 ## 2. Goal
 
@@ -27,10 +27,10 @@ The watcher should:
 
 ## 3. Non-Goals
 
-- Do not create a new dashboard tab in this change.
-- Do not invent historical pod creation time from Cloud Logging.
-- Do not replace Jenkins build ingestion or error classification.
-- Do not backfill Pods that were deleted before the watcher rollout. Old data can stay incomplete.
+- no dashboard UI changes in this slice
+- no invented historical Pod creation time from Cloud Logging
+- no Jenkins build ingestion or error-classification replacement
+- no backfill for Pods deleted before watcher rollout
 
 ## 4. Data Contract
 
@@ -68,7 +68,9 @@ Recommended first deployment:
 - target namespaces: `prow-test-pods,jenkins-tidb,jenkins-tiflow`
 - RBAC: `get`, `list`, `watch` on `pods` and `events` in target namespaces
 
-The watcher uses Kubernetes watch streams. On startup it first lists current Pods in each namespace, then starts watches from the returned `resourceVersion`. If a watch stream disconnects or the resource version expires, the worker relists and resumes from a fresh resource version.
+On startup, each namespace is listed once and then watched from the returned
+`resourceVersion`. If the stream disconnects or the resource version expires,
+the worker relists and resumes.
 
 Rollout precondition: migration `017_alter_ci_l1_pod_lifecycle_add_pod_created_at.sql`
 must be applied before `watch-pods` starts, otherwise metadata writes will fail because the
@@ -76,17 +78,12 @@ watcher persists Pod `metadata.creationTimestamp` into `ci_l1_pod_lifecycle.pod_
 
 ## 6. Health And Self-Healing
 
-The watcher exposes HTTP health endpoints from the same process:
-
-- `/livez`: returns success only when every registered Pod/Event watch stream has a recent heartbeat
-- `/readyz`: uses the same stream-heartbeat check so the Pod does not receive traffic until every namespace stream has completed at least one successful list/watch cycle
-
-Each namespace has two registered streams:
-
-- `<namespace>/pods`
-- `<namespace>/events`
-
-The heartbeat is updated after each successful list and after each watch response, including Kubernetes watch bookmarks. The Kubernetes watch request also sets `allowWatchBookmarks=true` and `timeoutSeconds`, so healthy long connections are expected to either receive events/bookmarks or reconnect periodically. If a stream is stuck beyond `CI_DASHBOARD_POD_WATCH_STALE_AFTER_SECONDS`, `/livez` fails and Kubernetes restarts the Pod.
+The watcher exposes `/livez` and `/readyz` from the same process. Each watched
+namespace registers two heartbeat streams, `<namespace>/pods` and
+`<namespace>/events`. Heartbeats update after each successful list and watch
+response, including bookmarks. If any stream is stale beyond
+`CI_DASHBOARD_POD_WATCH_STALE_AFTER_SECONDS`, health checks fail and Kubernetes
+restarts the Pod.
 
 Recommended first probe settings:
 
@@ -105,7 +102,8 @@ Scheduling wait should only use rows where:
 - `scheduled_at IS NOT NULL`
 - `scheduled_at >= pod_created_at`
 
-`FailedScheduling` should not be displayed as a CI failure rate. It is useful as a debug signal, but in an autoscaled GKE cluster it is commonly an intermediate retry event. The high-level dashboard should emphasize:
+`FailedScheduling` should not be displayed as a CI failure rate. In autoscaled
+GKE it is often an intermediate retry signal. The dashboard should emphasize:
 
 - final unscheduled Pods, if any
 - scheduling wait distribution
@@ -119,19 +117,20 @@ Writes are idempotent:
 - pod events are deduped by `(source_project, source_insert_id)`
 - lifecycle rows are upserted by `(source_project, namespace_name, pod_uid, pod_name)`
 
-The worker records a job state under `ci-watch-pods`. A restart is safe because the startup relist refreshes current Pod metadata and new watch streams continue from Kubernetes resource versions.
-
-Watch streams are not a durable historical log. If the watcher is down while short-lived Pods are created and deleted, those Pods can still be missed. This is an operational reliability problem, so alerts should eventually watch for worker restarts and DB write failures.
+The worker records job state under `ci-watch-pods`. Restart is safe because
+writes are idempotent and startup relist refreshes current Pod metadata. Watch
+streams are not a durable historical log, so Pods created and deleted while the
+watcher is down can still be missed.
 
 ## 9. Rollout Plan
 
-1. Deploy with `replicas=1` and a narrow namespace list.
-2. Validate that fresh lifecycle rows have `pod_created_at`, labels, annotations, and `Scheduled`.
-3. Compare new rows against existing Cloud Logging rows for a recent window.
-4. Update dashboard cards to count scheduling wait only for watcher-backed rows.
-5. Keep `sync-pods` temporarily as a compatibility/backfill path, but do not use Cloud Logging `Created` as Pod creation time.
+1. Deploy with `replicas=1`.
+2. Validate fresh rows have `pod_created_at`, labels, annotations, and `Scheduled`.
+3. Compare watcher rows against existing Cloud Logging rows for a recent window.
+4. Update dashboard cards to count scheduling wait only for complete watcher-backed rows.
+5. Keep `sync-pods` temporarily, but never use Cloud Logging `Created` as Pod creation time.
 
 ## 10. Open Follow-Ups
 
-- Add a small freshness monitor: latest `metadata_observed_at` by namespace.
-- Consider a dedicated `ci_l1_pod_watch_state` table only if Kubernetes resource versions need to survive restarts more precisely than startup relist.
+- add a freshness monitor for latest `metadata_observed_at` by namespace
+- add durable watch state only if startup relist is not precise enough
