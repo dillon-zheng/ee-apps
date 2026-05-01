@@ -56,6 +56,80 @@ Notes:
   - Kafka bootstrap service: `cluster-cd-kafka-bootstrap:9092`
   - Jenkins service DNS for internal callers: `http://jenkins.jenkins.svc.cluster.local`
 
+## Pod Watcher
+
+`watch-pods` is the long-running pod lifecycle collector. It watches live
+Kubernetes Pods and Events so `ci_l1_pod_lifecycle.pod_created_at` comes from
+Pod `metadata.creationTimestamp`, not from Cloud Logging container events.
+
+The Deployment runs in the `apps` namespace by default.
+
+Before smoke or rollout, make sure migration `017_alter_ci_l1_pod_lifecycle_add_pod_created_at.sql`
+has been applied to the target database.
+
+Render and apply the least-privilege RBAC first:
+
+```bash
+cd ci-dashboard
+./scripts/render_pod_watcher_rbac.sh \
+  --service-account-namespace apps \
+  --service-account-name ci-dashboard \
+  --target-namespaces prow-test-pods,jenkins-tidb,jenkins-tiflow \
+  | kubectl apply -f -
+```
+
+Render a Deployment manifest:
+
+```bash
+cd ci-dashboard
+./scripts/render_pod_watcher_deployment.sh \
+  --image ghcr.io/pingcap-qe/ee-apps/ci-dashboard-jobs:<tag> \
+  --db-secret ci-dashboard-db \
+  --ca-secret ci-dashboard-ca \
+  --gcp-project pingcap-testing-account \
+  --service-account ci-dashboard \
+  --cluster-name prow \
+  --location us-central1-c \
+  > /tmp/ci-dashboard-pod-watcher.yaml
+```
+
+Apply it:
+
+```bash
+kubectl apply -f /tmp/ci-dashboard-pod-watcher.yaml
+```
+
+Recommended first bring-up:
+
+```bash
+kubectl -n apps rollout status deployment/ci-dashboard-pod-watcher
+kubectl -n apps logs deployment/ci-dashboard-pod-watcher --follow
+```
+
+Useful overrides:
+
+- `--pod-event-namespaces prow-test-pods,jenkins-tidb,jenkins-tiflow` pins the watched CI namespaces.
+- `--watch-timeout-seconds 300` controls Kubernetes watch reconnect cadence.
+- `--retry-delay-seconds 5` controls retry delay after watch/API errors.
+- `--health-port 8081` exposes `/livez` and `/readyz` from the watcher process.
+- `--stale-after-seconds 720` fails health checks when any Pod/Event stream stops heartbeating.
+- `--replicas 1` keeps exactly one writer during the first rollout.
+
+Validation:
+
+```bash
+kubectl -n apps get deployment ci-dashboard-pod-watcher
+kubectl -n apps get pods -l app.kubernetes.io/name=ci-dashboard-pod-watcher
+kubectl -n apps logs deployment/ci-dashboard-pod-watcher --tail=200
+```
+
+Notes:
+
+- The service account needs `get`, `list`, and `watch` on `pods` and `events` in the target namespaces.
+- The worker is safe to restart because pod events and lifecycle rows are upserted idempotently.
+- Liveness/readiness probes use stream heartbeats, so a stuck Kubernetes watch connection should trigger Pod self-healing.
+- See `../../docs/pod-watcher-design.md` for the scheduling-wait data contract.
+
 ## Hourly Pod Sync
 
 `sync-pods` incrementally reads Cloud Logging `k8s_pod` events and writes:

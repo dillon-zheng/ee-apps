@@ -25,6 +25,7 @@ from ci_dashboard.jobs.sync_flaky_issues import (
     run_backfill_flaky_issue_pr_links,
     run_sync_flaky_issues,
 )
+from ci_dashboard.jobs.pod_watcher import run_watch_pods
 from ci_dashboard.jobs.sync_pods import run_reconcile_pod_linkage_for_time_window, run_sync_pods
 
 
@@ -70,6 +71,15 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "sync-pods",
         help="Sync Kubernetes pod lifecycle events into ci_l1_pod_* tables",
+    )
+    watch_pods_parser = subparsers.add_parser(
+        "watch-pods",
+        help="Watch live Kubernetes pods/events into ci_l1_pod_* tables",
+    )
+    watch_pods_parser.add_argument(
+        "--max-events",
+        type=int,
+        help="Stop after observing this many pod snapshots or Kubernetes events",
     )
     subparsers.add_parser(
         "repair-job-names",
@@ -259,6 +269,17 @@ def main() -> int:
         summary = run_sync_pods(engine, settings)
         logging.getLogger(__name__).info(
             "sync-pods finished",
+            extra={"summary": summary.__dict__},
+        )
+        return 0
+
+    if args.command == "watch-pods":
+        if args.max_events is not None and args.max_events <= 0:
+            parser.error("--max-events must be positive")
+        engine = build_engine(settings)
+        summary = run_watch_pods(engine, settings, max_events=args.max_events)
+        logging.getLogger(__name__).info(
+            "watch-pods finished",
             extra={"summary": summary.__dict__},
         )
         return 0
