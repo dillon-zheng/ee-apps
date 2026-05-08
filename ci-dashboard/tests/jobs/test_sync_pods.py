@@ -40,6 +40,7 @@ from ci_dashboard.jobs.sync_pods import (
     _normalize_jenkins_runtime_url,
     _null_safe_equals_sql,
     _parse_jenkins_pod_name_build_ref,
+    _pod_events_table_sql,
     _post_json,
     _read_int_env,
     _request_json,
@@ -68,6 +69,14 @@ def _settings(batch_size: int = 100) -> Settings:
 
 def _pod_identity(namespace_name: str, pod_uid: str, pod_name: str) -> tuple[str, str, str, str]:
     return ("pingcap-testing-account", namespace_name, pod_uid, pod_name)
+
+
+def test_pod_events_table_sql_uses_tidb_valid_index_hint_order() -> None:
+    assert _pod_events_table_sql("sqlite") == "ci_l1_pod_events AS events"
+
+    mysql_table = _pod_events_table_sql("mysql")
+    assert mysql_table == "ci_l1_pod_events events USE INDEX(idx_ci_l1_pod_events_identity_time)"
+    assert "USE INDEX(idx_ci_l1_pod_events_identity_time) AS events" not in mysql_table
 
 
 def _pod_metadata(
