@@ -37,6 +37,7 @@ const SERIES_COLORS = {
   queue_avg_s: "#7f5539",
   run_avg_s: "#2a9d8f",
   total_avg_s: "#315772",
+  gcp_migrate_rate_pct: "#457b9d",
   selected_job_total_avg_s: "#315772",
   flaky_rate_pct: "#d1495b",
   retry_loop_rate_pct: "#e9c46a",
@@ -186,6 +187,7 @@ export function TrendChart({
   const [hoveredBucketIndex, setHoveredBucketIndex] = useState(null);
   const [tooltipVisible, setTooltipVisible] = useState(false);
   const hoverTimerRef = useRef(null);
+  const chartMarkerPrefix = sanitizeSvgId(useId());
 
   useEffect(() => {
     return () => {
@@ -291,6 +293,9 @@ export function TrendChart({
   const plotHeight = height - padding.top - padding.bottom;
   const barSeries = series.filter((item) => item.type === "bar");
   const lineSeries = series.filter((item) => item.type === "line");
+  const trendlineSeries = lineSeries.filter(
+    (item) => item.showTrendline && item.trendlineArrow !== false,
+  );
   const hasBars = barSeries.length > 0;
   const xInset =
     hasBars && labels.length > 1
@@ -365,6 +370,29 @@ export function TrendChart({
   return (
     <div className="trend-chart">
       <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Trend chart">
+        {trendlineSeries.length ? (
+          <defs>
+            {trendlineSeries.map((item) => (
+              <marker
+                key={`${item.key}-trend-arrow`}
+                id={`${chartMarkerPrefix}-${sanitizeSvgId(item.key)}-trend-arrow`}
+                viewBox="0 0 12 12"
+                refX="10"
+                refY="6"
+                markerWidth={item.trendlineArrowWidth ?? 10}
+                markerHeight={item.trendlineArrowHeight ?? 10}
+                orient="auto"
+                markerUnits="userSpaceOnUse"
+              >
+                <path
+                  d="M 0 1 L 11 6 L 0 11 Z"
+                  fill={seriesColor(item.key)}
+                  fillOpacity={item.trendlineOpacity ?? 0.42}
+                />
+              </marker>
+            ))}
+          </defs>
+        ) : null}
         {leftTickValues.map((value, index) => {
           const ratio =
             leftTickValues.length > 1 ? index / (leftTickValues.length - 1) : 0;
@@ -500,17 +528,43 @@ export function TrendChart({
 
           return (
             <g key={item.key}>
-              {segments.map((segment, index) => (
-                <polyline
-                  key={`${item.key}-segment-${index}`}
-                  points={segment.map((point) => `${point.x},${point.y}`).join(" ")}
-                  fill="none"
-                  stroke={seriesColor(item.key)}
-                  strokeWidth="3"
-                  strokeDasharray={item.dash ? "7 6" : undefined}
-                  strokeLinejoin="round"
-                  strokeLinecap="round"
+              {item.showTrendline ? (
+                <TrendlineOverlay
+                  item={item}
+                  labels={labels}
+                  pointMap={pointMaps.get(item.key)}
+                  axisMin={axisMin}
+                  axisRange={axisRange}
+                  padding={padding}
+                  plotHeight={plotHeight}
+                  xForIndex={xForIndex}
+                  markerId={`${chartMarkerPrefix}-${sanitizeSvgId(item.key)}-trend-arrow`}
                 />
+              ) : null}
+              {segments.map((segment, index) => (
+                <g key={`${item.key}-segment-${index}`}>
+                  {item.showGuide ? (
+                    <polyline
+                      points={segment.map((point) => `${point.x},${point.y}`).join(" ")}
+                      fill="none"
+                      stroke={seriesColor(item.key)}
+                      strokeOpacity={item.guideOpacity ?? 0.18}
+                      strokeWidth={item.guideWidth ?? 8}
+                      strokeDasharray={item.guideDash ? "7 6" : undefined}
+                      strokeLinejoin="round"
+                      strokeLinecap="round"
+                    />
+                  ) : null}
+                  <polyline
+                    points={segment.map((point) => `${point.x},${point.y}`).join(" ")}
+                    fill="none"
+                    stroke={seriesColor(item.key)}
+                    strokeWidth="3"
+                    strokeDasharray={item.dash ? "7 6" : undefined}
+                    strokeLinejoin="round"
+                    strokeLinecap="round"
+                  />
+                </g>
               ))}
               {item.showPoints === false
                 ? null
@@ -659,6 +713,48 @@ export function TrendChart({
         ))}
       </div>
     </div>
+  );
+}
+
+function TrendlineOverlay({
+  item,
+  labels,
+  pointMap,
+  axisMin,
+  axisRange,
+  padding,
+  plotHeight,
+  xForIndex,
+  markerId,
+}) {
+  const trendlinePoints = buildTrendlinePoints(labels, pointMap, item);
+  if (!trendlinePoints) {
+    return null;
+  }
+
+  const points = trendlinePoints.map(({ index, value }) => {
+    const x = xForIndex(index);
+    const clampedValue = Math.min(
+      Math.max(value, axisMin),
+      axisMin + axisRange,
+    );
+    const y =
+      padding.top + plotHeight - ((clampedValue - axisMin) / axisRange) * plotHeight;
+    return `${x},${y}`;
+  });
+
+  return (
+    <polyline
+      points={points.join(" ")}
+      fill="none"
+      stroke={seriesColor(item.key)}
+      strokeOpacity={item.trendlineOpacity ?? 0.42}
+      strokeWidth={item.trendlineWidth ?? 4}
+      strokeDasharray={item.trendlineDash ? "12 10" : undefined}
+      strokeLinejoin="round"
+      strokeLinecap="round"
+      markerEnd={markerId ? `url(#${markerId})` : undefined}
+    />
   );
 }
 
@@ -1628,6 +1724,53 @@ function formatBottomAxisLabel(label) {
   }
   const [, _year, month, day] = match;
   return `${month}-${day}`;
+}
+
+function buildTrendlinePoints(labels, pointMap, item) {
+  if (!labels?.length || !pointMap) {
+    return null;
+  }
+
+  const samples = labels
+    .map((label, index) => {
+      const value = pointMap.get(label);
+      if (value == null || !Number.isFinite(value)) {
+        return null;
+      }
+      return { index, value: Number(value) };
+    })
+    .filter(Boolean);
+
+  if (samples.length < 2) {
+    return null;
+  }
+
+  const count = samples.length;
+  const sumX = samples.reduce((sum, sample) => sum + sample.index, 0);
+  const sumY = samples.reduce((sum, sample) => sum + sample.value, 0);
+  const sumXY = samples.reduce((sum, sample) => sum + sample.index * sample.value, 0);
+  const sumXX = samples.reduce((sum, sample) => sum + sample.index * sample.index, 0);
+  const denominator = count * sumXX - sumX * sumX;
+  const slope = denominator === 0 ? 0 : (count * sumXY - sumX * sumY) / denominator;
+  const intercept = (sumY - slope * sumX) / count;
+  const startIndex = samples[0].index;
+  const endIndex = samples[samples.length - 1].index;
+
+  if (item.trendlineMode === "fit-all-points") {
+    return labels.map((_label, index) => ({
+      index,
+      value: intercept + slope * index,
+    }));
+  }
+
+  return [
+    { index: startIndex, value: intercept + slope * startIndex },
+    { index: endIndex, value: intercept + slope * endIndex },
+  ];
+}
+
+function sanitizeSvgId(value) {
+  return String(value || "chart").replace(/[^a-zA-Z0-9_-]/g, "-");
 }
 
 function hashString(value) {

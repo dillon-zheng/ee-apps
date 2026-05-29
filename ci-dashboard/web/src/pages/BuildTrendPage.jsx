@@ -56,6 +56,16 @@ export default function BuildTrendPage({ filters }) {
     page.data?.duration_trend?.series,
     "total_avg_s",
   );
+  const ciStatusSummaryTrendSeries = buildCiStatusSummaryTrendSeries(
+    page.data?.outcome_trend?.series,
+    page.data?.duration_trend?.series,
+    page.data?.cloud_posture_trend?.series,
+    filters,
+  );
+  const ciStatusSummaryRightAxisMin = computeCenteredPercentAxisMinForKeys(
+    ciStatusSummaryTrendSeries,
+    ["success_rate_pct", "gcp_migrate_rate_pct"],
+  );
   const cloudRepoShare = page.data?.cloud_repo_share?.clouds || [];
   const gcpRepoShare = limitRepoShareItems(
     cloudRepoShare.find((cloud) => cloud.cloud_phase === "GCP"),
@@ -294,6 +304,21 @@ export default function BuildTrendPage({ filters }) {
         )}
       </Panel>
 
+      <Panel
+        title="Success rate vs run avg trend"
+        subtitle="Track success-only average run time on the left axis, plus success rate and GCP migrate rate on the right axis over the same buckets."
+        loading={page.loading}
+        error={page.error}
+      >
+        <TrendChart
+          series={ciStatusSummaryTrendSeries}
+          yFormatter={formatSeconds}
+          rightYFormatter={formatPercent}
+          rightYMin={ciStatusSummaryRightAxisMin}
+          rightYMax={100}
+        />
+      </Panel>
+
       {selectedRepoSlice ? (
         <DrilldownModal
           title={`${selectedRepoSlice.name} branch mix`}
@@ -434,6 +459,26 @@ function computeCenteredPercentAxisMin(series, key, fixedMax = 100) {
   return Number(Math.max(0, Math.min(centeredMin, maxVisibleMin)).toFixed(2));
 }
 
+function computeCenteredPercentAxisMinForKeys(series, keys, fixedMax = 100) {
+  const values = (series || [])
+    .filter((item) => keys.includes(item.key))
+    .flatMap((item) => item.points || [])
+    .map((point) => Number(point[1]))
+    .filter((value) => Number.isFinite(value));
+
+  if (!values.length) {
+    return 0;
+  }
+
+  const average = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const minValue = Math.min(...values);
+  const centeredMin = average * 2 - fixedMax;
+  const visibilityPadding = Math.max(Math.min((fixedMax - minValue) * 0.08, 3), 1);
+  const maxVisibleMin = Math.max(0, minValue - visibilityPadding);
+
+  return Number(Math.max(0, Math.min(centeredMin, maxVisibleMin)).toFixed(2));
+}
+
 function buildSelectedJobTrendSubtitle(jobName) {
   if (!jobName) {
     return "Track a selected job's success rate and success avg total duration over the current bucket setting.";
@@ -487,6 +532,86 @@ function buildSelectedJobTrendSeries(outcomeSeries, durationSeries, filters) {
         label,
         successRateByBucket.has(label) ? successRateByBucket.get(label) : null,
       ]),
+    });
+  }
+
+  return series;
+}
+
+function buildCiStatusSummaryTrendSeries(outcomeSeries, durationSeries, cloudPostureSeries, filters) {
+  const successRateSeries = outcomeSeries?.find((item) => item.key === "success_rate_pct");
+  const runAvgSeries = durationSeries?.find((item) => item.key === "run_avg_s");
+  const gcpBuildSeries = cloudPostureSeries?.find((item) => item.key === "gcp_build_count");
+  const idcBuildSeries = cloudPostureSeries?.find((item) => item.key === "idc_build_count");
+  const bucketLabels = buildBucketLabels(
+    filters?.start_date,
+    filters?.end_date,
+    filters?.granularity,
+  );
+  const effectiveLabels = bucketLabels.length
+    ? bucketLabels
+    : Array.from(
+        new Set([
+          ...(successRateSeries?.points.map((point) => point[0]) || []),
+          ...(runAvgSeries?.points.map((point) => point[0]) || []),
+          ...(gcpBuildSeries?.points.map((point) => point[0]) || []),
+          ...(idcBuildSeries?.points.map((point) => point[0]) || []),
+        ]),
+      ).sort();
+  const successRateByBucket = new Map(successRateSeries?.points || []);
+  const runAvgByBucket = new Map(runAvgSeries?.points || []);
+  const gcpBuildByBucket = new Map(gcpBuildSeries?.points || []);
+  const idcBuildByBucket = new Map(idcBuildSeries?.points || []);
+  const series = [];
+
+  if (runAvgSeries) {
+    series.push({
+      key: "run_avg_s",
+      label: "Run avg (s)",
+      type: "line",
+      axis: "left",
+      showTrendline: true,
+      trendlineWidth: 4,
+      trendlineOpacity: 0.42,
+      trendlineArrowWidth: 9,
+      trendlineArrowHeight: 9,
+      points: effectiveLabels.map((label) => [
+        label,
+        runAvgByBucket.has(label) ? runAvgByBucket.get(label) : null,
+      ]),
+    });
+  }
+
+  if (successRateSeries) {
+    series.push({
+      key: "success_rate_pct",
+      label: "Success rate %",
+      type: "line",
+      axis: "right",
+      showTrendline: true,
+      trendlineWidth: 4,
+      trendlineOpacity: 0.42,
+      trendlineArrowWidth: 9,
+      trendlineArrowHeight: 9,
+      points: effectiveLabels.map((label) => [
+        label,
+        successRateByBucket.has(label) ? successRateByBucket.get(label) : null,
+      ]),
+    });
+  }
+
+  if (gcpBuildSeries || idcBuildSeries) {
+    series.push({
+      key: "gcp_migrate_rate_pct",
+      label: "GCP migrate rate",
+      type: "line",
+      axis: "right",
+      points: effectiveLabels.map((label) => {
+        const gcpBuilds = Number(gcpBuildByBucket.get(label) || 0);
+        const idcBuilds = Number(idcBuildByBucket.get(label) || 0);
+        const totalBuilds = gcpBuilds + idcBuilds;
+        return [label, totalBuilds ? (gcpBuilds * 100) / totalBuilds : 0];
+      }),
     });
   }
 

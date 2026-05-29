@@ -5,6 +5,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
+from sqlalchemy import inspect
 from sqlalchemy.engine import Connection
 
 
@@ -229,6 +230,33 @@ def builds_table_expr(
     if has_time_window:
         return f"{table} FORCE INDEX(idx_ci_l1_builds_start_time_id)"
     return table
+
+
+def table_has_column(connection: Connection, table_name: str, column_name: str) -> bool:
+    cache = connection.info.setdefault("_table_columns_cache", {})
+    columns = cache.get(table_name)
+    if columns is None:
+        columns = {
+            column.get("name")
+            for column in inspect(connection).get_columns(table_name)
+            if column.get("name")
+        }
+        cache[table_name] = columns
+    return column_name in columns
+
+
+def normalized_build_key_expr(
+    connection: Connection,
+    *,
+    table_name: str = "ci_l1_builds",
+    table_alias: str = "",
+) -> str:
+    prefix = f"{table_alias}." if table_alias else ""
+    if table_has_column(connection, table_name, "normalized_build_url"):
+        return f"{prefix}normalized_build_url"
+    if table_has_column(connection, table_name, "normalized_build_key"):
+        return f"{prefix}normalized_build_key"
+    return f"{prefix}normalized_build_url"
 
 
 def filter_complete_week_rows(

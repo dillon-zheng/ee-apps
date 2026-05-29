@@ -64,6 +64,23 @@ function buildCenteredPercentAxisMax(rows) {
   return Math.ceil(target / 5) * 5;
 }
 
+function buildDistinctCaseTrendSeries(weeks, rows) {
+  if (!weeks?.length || !rows?.length) {
+    return [];
+  }
+
+  return rows.map((row, rowIndex) => ({
+    key: row.branch || `branch_${rowIndex + 1}`,
+    label: row.branch || "Unknown branch",
+    type: "line",
+    showPoints: false,
+    points: weeks.map((week, weekIndex) => [
+      week,
+      Number(row.values?.[weekIndex] ?? 0),
+    ]),
+  }));
+}
+
 function parseIsoDate(value) {
   const [year, month, day] = String(value || "").split("-").map(Number);
   if (!year || !month || !day) {
@@ -147,7 +164,9 @@ export default function FlakyPage({ filters }) {
   const showPanelActions = !page.loading && !page.error;
   const currentPeriod = page.data?.period_comparison?.groups?.find((group) => group.name === "period_a")?.values;
   const previousPeriod = page.data?.period_comparison?.groups?.find((group) => group.name === "period_b")?.values;
+  const distinctWeeks = page.data?.distinct_flaky_case_counts?.weeks || [];
   const distinctRows = page.data?.distinct_flaky_case_counts?.rows || [];
+  const distinctCaseTrendSeries = buildDistinctCaseTrendSeries(distinctWeeks, distinctRows);
   const issueWeeks = page.data?.issue_case_weekly_rates?.weeks || [];
   const issueRows = page.data?.issue_case_weekly_rates?.rows || [];
   const latestDistinctTotal = distinctRows.reduce(
@@ -269,7 +288,7 @@ export default function FlakyPage({ filters }) {
 
       <Panel
         title="Distinct flaky case number"
-        subtitle="Weekly distinct flaky testcase count derived from problem_case_runs, aligned by PR target branch."
+        subtitle="Weekly distinct flaky testcase count derived from problem_case_runs, aligned by PR target branch, with the trend up top and exact branch values kept in the table below."
         loading={page.loading}
         error={page.error}
         actions={showPanelActions ? (
@@ -285,11 +304,21 @@ export default function FlakyPage({ filters }) {
           </div>
         ) : null}
       >
-        <DistinctCaseCountTable
-          weeks={page.data?.distinct_flaky_case_counts?.weeks}
-          rows={page.data?.distinct_flaky_case_counts?.rows}
-          scrollClassName="table-scroll--compact-y"
-        />
+        <div className="chart-table-stack">
+          <TrendChart
+            series={distinctCaseTrendSeries}
+            yFormatter={formatNumber}
+            yTickMode="integer"
+            height={224}
+            compactY
+            preserveLabelOrder
+          />
+          <DistinctCaseCountTable
+            weeks={distinctWeeks}
+            rows={distinctRows}
+            scrollClassName="table-scroll--compact-y"
+          />
+        </div>
       </Panel>
 
       <section className="progress-summary-grid">
