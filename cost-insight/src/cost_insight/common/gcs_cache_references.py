@@ -99,7 +99,7 @@ def extract_cas_references_from_action_result_bytes(
             digest = _digest_from_output_file(field.value)
             if digest is not None:
                 references.add(_cas_object_name(digest.hash_value))
-        elif field.field_number in {6, 8} and isinstance(field.value, bytes):
+        elif field.field_number in {7, 8} and isinstance(field.value, bytes):
             digest = _parse_digest(field.value)
             if digest is not None:
                 references.add(_cas_object_name(digest.hash_value))

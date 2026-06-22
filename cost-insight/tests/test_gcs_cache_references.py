@@ -80,7 +80,7 @@ def _action_result(*, output_files=(), output_directories=(), stdout_digest=None
     for output_directory in output_directories:
         parts.append(_field_bytes(3, output_directory))
     if stdout_digest is not None:
-        parts.append(_field_bytes(6, stdout_digest))
+        parts.append(_field_bytes(7, stdout_digest))
     if stderr_digest is not None:
         parts.append(_field_bytes(8, stderr_digest))
     return b"".join(parts)
