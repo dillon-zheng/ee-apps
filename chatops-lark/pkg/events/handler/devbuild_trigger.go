@@ -153,7 +153,7 @@ func parseCommandDevbuildTrigger(args []string) (*triggerParams, error) {
 	}
 
 	if ret.engine == "" {
-		ret.engine = defaultEngineForProduct(ret.product)
+		ret.engine = "tekton"
 	}
 
 	if err := ret.Verify(); err != nil {
@@ -163,8 +163,4 @@ func parseCommandDevbuildTrigger(args []string) (*triggerParams, error) {
 	ret.buildEnvs = buildEnv
 
 	return &ret, nil
-}
-
-func defaultEngineForProduct(product string) string {
-	return "tekton"
 }

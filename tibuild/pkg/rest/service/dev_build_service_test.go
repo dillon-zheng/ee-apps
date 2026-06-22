@@ -86,11 +86,12 @@ func (m *mockGHClient) GetBranchesForCommit(ctx context.Context, owner, repo, co
 func TestDevBuildCreate(t *testing.T) {
 	mockedJenkins := &mockJenkins{resume: make(chan struct{})}
 	mockedRepo := mockRepo{}
+	mockedTrigger := &mockTrigger{}
 	server := DevbuildServer{
 		Repo:     &mockedRepo,
 		Jenkins:  mockedJenkins,
 		Now:      time.Now,
-		Tekton:   &mockTrigger{},
+		Tekton:   mockedTrigger,
 		GHClient: &mockGHClient{},
 	}
 
@@ -101,6 +102,9 @@ func TestDevBuildCreate(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 1, entity.ID)
 		require.Equal(t, BuildStatusPending, entity.Status.Status)
+		require.Equal(t, 1, mockedTrigger.dev.ID)
+		require.Equal(t, entity.Spec.PipelineEngine, mockedTrigger.dev.Spec.PipelineEngine)
+		require.Equal(t, entity.Spec.GitHash, mockedTrigger.dev.Spec.GitHash)
 	})
 	t.Run("auto fill plugin for devbuild", func(t *testing.T) {
 		entity, err := server.Create(context.TODO(),

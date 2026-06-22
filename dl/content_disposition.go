@@ -10,11 +10,15 @@ import (
 // filename (ASCII fallback) and filename* (UTF-8 encoded) per RFC 6266.
 // This ensures compatibility with wget, curl, and modern browsers.
 func ContentDisposition(filename string) string {
-	escaped := url.QueryEscape(filename)
+	escaped := encodeRFC8187Value(filename)
 	// For ASCII-only filenames, filename and filename* can be the same.
 	// For non-ASCII filenames, filename uses ASCII approximation.
 	asciiFilename := toASCIIFilename(filename)
 	return fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, asciiFilename, escaped)
+}
+
+func encodeRFC8187Value(value string) string {
+	return strings.ReplaceAll(url.QueryEscape(value), "+", "%20")
 }
 
 // toASCIIFilename converts a filename to ASCII-safe version.

@@ -24,7 +24,7 @@ func TestContentDisposition(t *testing.T) {
 		{
 			name:     "ASCII filename with spaces",
 			filename: "my file.tar.gz",
-			want:     `attachment; filename="my file.tar.gz"; filename*=UTF-8''my+file.tar.gz`,
+			want:     `attachment; filename="my file.tar.gz"; filename*=UTF-8''my%20file.tar.gz`,
 		},
 		{
 			name:     "Chinese filename",
@@ -106,7 +106,7 @@ func TestContentDispositionHTTPResponse(t *testing.T) {
 			}
 
 			// Verify the filename* parameter uses UTF-8 encoding
-			expectedFilenameStar := "filename*=UTF-8''" + url.QueryEscape(tt.filename)
+			expectedFilenameStar := "filename*=UTF-8''" + encodeRFC8187Value(tt.filename)
 			if !strings.Contains(cd, expectedFilenameStar) {
 				t.Errorf("Content-Disposition missing expected filename*=%q, got: %s",
 					expectedFilenameStar, cd)
@@ -137,7 +137,15 @@ func TestContentDispositionWgetCompatibility(t *testing.T) {
 	}
 
 	// The filename* parameter should also be present for modern clients
-	if !strings.Contains(cd, "filename*=UTF-8''"+url.QueryEscape(filename)) {
+	if !strings.Contains(cd, "filename*=UTF-8''"+encodeRFC8187Value(filename)) {
 		t.Errorf("Content-Disposition should contain UTF-8 encoded filename*, got: %s", cd)
+	}
+}
+
+func TestEncodeRFC8187ValueEncodesSpaceAsPercent20(t *testing.T) {
+	got := encodeRFC8187Value("my file+name.tar.gz")
+	want := "my%20file%2Bname.tar.gz"
+	if got != want {
+		t.Fatalf("encodeRFC8187Value() = %q, want %q", got, want)
 	}
 }

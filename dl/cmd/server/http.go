@@ -2,12 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -16,20 +16,13 @@ import (
 	goahttp "goa.design/goa/v3/http"
 	httpmdlwr "goa.design/goa/v3/http/middleware"
 	"goa.design/goa/v3/middleware"
+	goa "goa.design/goa/v3/pkg"
 
-	dl "github.com/PingCAP-QE/ee-apps/dl"
 	ks3svr "github.com/PingCAP-QE/ee-apps/dl/gen/http/ks3/server"
 	ocisvr "github.com/PingCAP-QE/ee-apps/dl/gen/http/oci/server"
 	ks3 "github.com/PingCAP-QE/ee-apps/dl/gen/ks3"
 	oci "github.com/PingCAP-QE/ee-apps/dl/gen/oci"
-	pkgoci "github.com/PingCAP-QE/ee-apps/dl/pkg/oci"
-	"oras.land/oras-go/v2/registry/remote"
 )
-
-// ociRepoProvider is implemented by OCI service types that can create authenticated repository clients.
-type ociRepoProvider interface {
-	GetTargetRepo(repo string) (*remote.Repository, error)
-}
 
 // handleHTTPServer starts configures and starts a HTTP server on the given
 // URL. It shuts down the server if any error is received in the error channel.
@@ -92,9 +85,7 @@ func handleHTTPServer(ctx context.Context, u *url.URL, ociEndpoints *oci.Endpoin
 	// here apply to all the service endpoints.
 	var handler http.Handler = mux
 	{
-		if provider, ok := ociSvc.(ociRepoProvider); ok {
-			handler = headOCIMiddleware(provider, logger)(handler)
-		}
+		handler = headOCIMiddleware(ociSvc, logger)(handler)
 		handler = httpmdlwr.Log(adapter)(handler)
 		handler = httpmdlwr.RequestID()(handler)
 	}
@@ -146,7 +137,7 @@ func errorHandler(logger *log.Logger) func(context.Context, http.ResponseWriter,
 
 // headOCIMiddleware intercepts HEAD requests to /oci-file/{*repository} and
 // checks file existence without downloading the blob, enabling wget --spider.
-func headOCIMiddleware(provider ociRepoProvider, logger *log.Logger) func(http.Handler) http.Handler {
+func headOCIMiddleware(ociSvc oci.Service, logger *log.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodHead {
@@ -172,62 +163,51 @@ func headOCIMiddleware(provider ociRepoProvider, logger *log.Logger) func(http.H
 				return
 			}
 
-			file := qp.Get("file")
-			fileRegex := qp.Get("file_regex")
-
-			repo, err := provider.GetTargetRepo(repository)
-			if err != nil {
-				logger.Printf("HEAD oci-file: getTargetRepo: %v", err)
-				http.Error(w, "failed to resolve repository", http.StatusInternalServerError)
-				return
+			payload := &oci.HeadFilePayload{
+				Repository: repository,
+				Tag:        tag,
 			}
-
-			ctx := r.Context()
-			var targetFile string
-
-			if file != "" {
-				targetFile = file
-			} else if fileRegex != "" {
-				pattern, err := regexp.Compile(fileRegex)
-				if err != nil {
-					http.Error(w, "invalid file_regex", http.StatusBadRequest)
-					return
-				}
-
-				files, err := pkgoci.ListFiles(ctx, repo, tag)
-				if err != nil {
-					logger.Printf("HEAD oci-file: ListFiles: %v", err)
-					http.Error(w, "failed to list files", http.StatusInternalServerError)
-					return
-				}
-
-				for _, f := range files {
-					if pattern.MatchString(f) {
-						targetFile = f
-						break
-					}
-				}
-
-				if targetFile == "" {
-					http.Error(w, "file not found", http.StatusNotFound)
-					return
-				}
-			} else {
+			if file := qp.Get("file"); file != "" {
+				payload.File = &file
+			}
+			if fileRegex := qp.Get("file_regex"); fileRegex != "" {
+				payload.FileRegex = &fileRegex
+			}
+			if payload.File == nil && payload.FileRegex == nil {
 				http.Error(w, "missing file or file_regex parameter", http.StatusBadRequest)
 				return
 			}
 
-			descriptor, err := pkgoci.FetchFileDescriptor(ctx, repo, tag, targetFile)
+			result, err := ociSvc.HeadFile(r.Context(), payload)
 			if err != nil {
-				logger.Printf("HEAD oci-file: FetchFileDescriptor: %v", err)
-				http.Error(w, "file not found", http.StatusNotFound)
+				status, message := headOCIErrorResponse(err)
+				logger.Printf("HEAD oci-file: HeadFile: %v", err)
+				http.Error(w, message, status)
 				return
 			}
 
-			w.Header().Set("Content-Disposition", dl.ContentDisposition(targetFile))
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", descriptor.Size))
+			w.Header().Set("Content-Disposition", result.ContentDisposition)
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", result.Length))
 			w.Header().Set("Content-Type", "application/octet-stream")
 			w.WriteHeader(http.StatusOK)
 		})
 	}
+}
+
+func headOCIErrorResponse(err error) (int, string) {
+	var serviceErr *goa.ServiceError
+	if errors.As(err, &serviceErr) {
+		if serviceErr.Name == "invalid_file_path" {
+			message := serviceErr.ErrorName()
+			switch {
+			case strings.Contains(message, "none `file` or `file_regex` param given"):
+				return http.StatusBadRequest, "missing file or file_regex parameter"
+			case strings.Contains(message, "error parsing regexp"):
+				return http.StatusBadRequest, "invalid file_regex"
+			default:
+				return http.StatusNotFound, "file not found"
+			}
+		}
+	}
+	return http.StatusInternalServerError, "failed to resolve repository"
 }
